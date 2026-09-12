@@ -1,0 +1,139 @@
+"""nn.Module fixtures with hand-known expected clusterings."""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class ElementwiseChain(nn.Module):
+    """Happy path: one clean fusable chain."""
+
+    def forward(self, x):
+        x = x * 2.0
+        x = F.relu(x)
+        x = x + 1.0
+        return x
+
+
+class ReconvergingDiamond(nn.Module):
+    """Forks and rejoins - still one cluster, h stays in a register."""
+
+    def forward(self, x):
+        h = F.relu(x)
+        return h * 2.0 + h  # catches a naive len(users) > 1 fan-out check
+
+
+class RepeatedOperand(nn.Module):
+    """One user, two arg positions."""
+
+    def forward(self, x):
+        h = F.relu(x)
+        return h + h
+
+
+class TrueFanOut(nn.Module):
+    """matmul must read h from memory, so h can't be fused away."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.w = nn.Parameter(torch.randn(d, d))
+
+    def forward(self, x):
+        h = F.relu(x)
+        return h * 2.0 + h @ self.w
+
+
+class EscapingOutput(nn.Module):
+    """h is returned, so it must exist in memory."""
+
+    def forward(self, x):
+        h = F.relu(x)
+        return h * 2.0, h
+
+
+class BroadcastBias(nn.Module):
+    """[D] bias against [B, S, D] - forces per-operand index derivation."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.bias = nn.Parameter(torch.zeros(d))
+
+    def forward(self, x):
+        return F.gelu(x + self.bias)
+
+
+class ReductionBoundary(nn.Module):
+    """scale → mask → softmax (PRD §5 example)."""
+
+    def forward(self, x, mask):
+        x = x * 0.125
+        x = x.masked_fill(mask, -1e9)
+        return F.softmax(x, dim=-1)
+
+
+class OpaqueBarrier(nn.Module):
+    """matmul between two chains - must yield TWO clusters."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.w = nn.Parameter(torch.randn(d, d))
+
+    def forward(self, x):
+        x = F.relu(x * 2.0)
+        x = x @ self.w
+        return F.gelu(x + 1.0)
+
+
+class Untraceable(nn.Module):
+    """Data-dependent control flow."""
+
+    def forward(self, x):
+        if x.sum() > 0:
+            return F.relu(x)
+        return x
+
+
+class ModuleStyle(nn.Module):
+    """Every op behind an nn.Module - 4 opaque nodes under symbolic_trace, 0 under FusionTracer."""
+
+    def __init__(self, d=32):
+        super().__init__()
+        self.norm = nn.LayerNorm(d)
+        self.fc = nn.Linear(d, d)
+        self.act = nn.GELU()
+        self.drop = nn.Dropout(0.1)
+
+    def forward(self, x):
+        h = self.norm(x)
+        h = self.fc(h)
+        h = self.act(h)
+        h = self.drop(h)
+        return h + x
+
+
+class HasUnlistedModule(nn.Module):
+    """nn.MultiheadAttention isn't on the allowlist and must stay a leaf."""
+
+    def __init__(self, d=32):
+        super().__init__()
+        self.attn = nn.MultiheadAttention(d, 4, batch_first=True)
+        self.act = nn.GELU()
+
+    def forward(self, x):
+        a, _ = self.attn(x, x, x)
+        return self.act(x + a)
+
+
+class CustomSubmodule(nn.Module):
+    """User-defined submodule - fx traces into these by default."""
+
+    class Inner(nn.Module):
+        def forward(self, x):
+            return x * 2.0 + 1.0
+
+    def __init__(self):
+        super().__init__()
+        self.inner = self.Inner()
+
+    def forward(self, x):
+        return self.inner(x)
