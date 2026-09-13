@@ -61,6 +61,16 @@ def test_non_multiple_of_block_size():
     torch.testing.assert_close(fn(*inputs), model(*inputs))
 
 
+def test_backward_stub_raises_rather_than_detaching():
+    """Forward-only for now, so backward must refuse instead of silently no-op."""
+    model = basic.ElementwiseChain().cuda()
+    fn, inputs, _ = build(model, (4, 64))
+    x = inputs[0].detach().requires_grad_(True)
+    assert fn(x).grad_fn is not None  # still wired into the graph
+    with pytest.raises(NotImplementedError, match="not generated yet"):
+        (fn(x) + x).sum().backward()
+
+
 @pytest.mark.xfail(reason="broadcast index derivation not implemented", strict=False)
 def test_broadcast_bias_matches_eager():
     """[D] bias against [B,S,D] - needs its own offset, not the flat one."""

@@ -98,13 +98,27 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
 
     # assemble wrapper
     in_args = [f"in{i}" for i in range(len(in_ptrs))]
+    args = ", ".join(in_args)
     wrapper_lines = [
-        f"def {name}({', '.join(in_args)}):",
-        f"    out0 = torch.empty_like({in_args[0]})",
-        f"    n = {in_args[0]}.numel()",
-        "    grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)",
-        f"    {name}_kernel[grid]({', '.join(in_args)}, out0, n, BLOCK_SIZE=1024)",
-        "    return out0",
+        f"class _{name}(torch.autograd.Function):",
+        "    @staticmethod",
+        f"    def forward(ctx, {args}):",
+        f"        out0 = torch.empty_like({in_args[0]})",
+        f"        n = {in_args[0]}.numel()",
+        "        grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)",
+        f"        {name}_kernel[grid]({args}, out0, n, BLOCK_SIZE=1024)",
+        f"        ctx.save_for_backward({args})  # what a backward kernel will need",
+        "        return out0",
+        "",
+        "    @staticmethod",
+        "    def backward(ctx, grad_out):",
+        f"        # TODO: {name}_backward_kernel. Inputs are in ctx.saved_tensors;",
+        "        # what is missing is a derivative rule per op, chained in reverse.",
+        f'        raise NotImplementedError("{name}: backward not generated yet")',
+        "",
+        "",
+        f"def {name}({args}):",
+        f"    return _{name}.apply({args})",
     ]
     wrapper_src = "\n".join(wrapper_lines)
 
