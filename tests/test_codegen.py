@@ -30,9 +30,8 @@ def test_topological_substitution_chains_variables():
     compute = [ln.strip() for ln in lines if ln.strip().startswith("v")]
     # v0 is loaded, v1/v2/v3 should reference prior v's or constants
     for line in compute[1:]:
-        lhs, rhs = line.split(" = ", 1)
-        idx = int(lhs[1:])
-        # rhs should only reference v0..v{idx-1} or literals, not fx node names
+        _, rhs = line.split(" = ", 1)
+        # rhs references earlier v's or literals, never fx node names
         assert "relu" not in rhs and "mul" not in rhs and "add" not in rhs
 
 
