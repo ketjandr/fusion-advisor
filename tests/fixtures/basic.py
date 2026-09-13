@@ -158,6 +158,38 @@ class HasUnlistedModule(nn.Module):
         return self.act(x + a)
 
 
+class ChainedOneLiner(nn.Module):
+    """Every op on one line - the line also holds a matmul, so no safe diff."""
+
+    def __init__(self, d=32):
+        super().__init__()
+        self.w1, self.act = nn.Linear(d, d), nn.GELU()
+
+    def forward(self, x):
+        return self.act(self.w1(x)) + x
+
+
+class NestedBlock(nn.Module):
+    """Ops authored in the inner forward, residual in the outer one."""
+
+    class FFN(nn.Module):
+        def __init__(self, d):
+            super().__init__()
+            self.w = nn.Linear(d, d)
+
+        def forward(self, x):
+            h = self.w(x)
+            h = F.gelu(h)
+            return h * 0.5
+
+    def __init__(self, d=32):
+        super().__init__()
+        self.ffn = self.FFN(d)
+
+    def forward(self, x):
+        return self.ffn(x) + x  # residual written at THIS level
+
+
 class CustomSubmodule(nn.Module):
     """User-defined submodule - fx traces into these by default."""
 

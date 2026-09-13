@@ -15,7 +15,7 @@ from fusion_advisor.ir.trace import trace
 from tests.fixtures import basic
 
 triton = pytest.importorskip("triton", reason="needs triton")
-import triton.language as tl  # noqa: E402
+import triton.language as tl
 
 pytestmark = [
     pytest.mark.gpu,
