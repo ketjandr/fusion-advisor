@@ -5,6 +5,9 @@ test_codegen.py stops at string inspection, which can't catch a lowering rule
 that emits a call to a function Triton doesn't have.
 """
 
+import importlib.util
+import sys
+
 import pytest
 import torch
 
@@ -15,16 +18,30 @@ from fusion_advisor.ir.trace import trace
 from tests.fixtures import basic
 
 triton = pytest.importorskip("triton", reason="needs triton")
-import triton.language as tl
 
 pytestmark = [
     pytest.mark.gpu,
     pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA"),
 ]
 
+HEADER = "import torch\nimport triton\nimport triton.language as tl\n\n"
 
-def build(model, *input_shapes):
-    """Full pipeline: trace -> shapes -> detect -> emit -> exec."""
+
+def load_kernel(kernel, tmp_path):
+    """Import the generated module from a real file."""
+    path = tmp_path / f"{kernel.name}_gen.py"
+    path.write_text(f"{HEADER}{kernel.kernel_source}\n\n{kernel.wrapper_source}\n")
+
+    mod_name = f"fa_gen_{kernel.name}_{tmp_path.name}"
+    spec = importlib.util.spec_from_file_location(mod_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[mod_name] = mod
+    spec.loader.exec_module(mod)
+    return getattr(mod, kernel.name)
+
+
+def build(model, *input_shapes, tmp_path):
+    """Full pipeline: trace -> shapes -> detect -> emit -> import."""
     gm = trace(model)
     inputs = tuple(torch.randn(*s, device="cuda") for s in input_shapes)
     specs = propagate(gm, *inputs)
@@ -32,10 +49,7 @@ def build(model, *input_shapes):
     assert len(clusters) == 1, f"expected 1 cluster, got {len(clusters)}"
 
     kernel = emit(clusters[0], specs)
-    ns = {"torch": torch, "triton": triton, "tl": tl}
-    exec(kernel.kernel_source, ns)  # noqa: S102
-    exec(kernel.wrapper_source, ns)  # noqa: S102
-    return ns[kernel.name], inputs, kernel
+    return load_kernel(kernel, tmp_path), inputs, kernel
 
 
 @pytest.mark.parametrize(
@@ -47,24 +61,24 @@ def build(model, *input_shapes):
     ],
     ids=["chain", "diamond", "repeated"],
 )
-def test_kernel_matches_eager(make, shapes):
+def test_kernel_matches_eager(make, shapes, tmp_path):
     """The whole point: fused output == eager output."""
     model = make().cuda()
-    fn, inputs, _ = build(model, *shapes)
+    fn, inputs, _ = build(model, *shapes, tmp_path=tmp_path)
     torch.testing.assert_close(fn(*inputs), model(*inputs))
 
 
-def test_non_multiple_of_block_size():
+def test_non_multiple_of_block_size(tmp_path):
     """Tail block - mask must suppress the out-of-range lanes."""
     model = basic.ElementwiseChain().cuda()
-    fn, inputs, _ = build(model, (3, 101))  # 303 elements, not a block multiple
+    fn, inputs, _ = build(model, (3, 101), tmp_path=tmp_path)  # 303 elements
     torch.testing.assert_close(fn(*inputs), model(*inputs))
 
 
-def test_backward_stub_raises_rather_than_detaching():
+def test_backward_stub_raises_rather_than_detaching(tmp_path):
     """Forward-only for now, so backward must refuse instead of silently no-op."""
     model = basic.ElementwiseChain().cuda()
-    fn, inputs, _ = build(model, (4, 64))
+    fn, inputs, _ = build(model, (4, 64), tmp_path=tmp_path)
     x = inputs[0].detach().requires_grad_(True)
     assert fn(x).grad_fn is not None  # still wired into the graph
     with pytest.raises(NotImplementedError, match="not generated yet"):
@@ -72,23 +86,20 @@ def test_backward_stub_raises_rather_than_detaching():
 
 
 @pytest.mark.xfail(reason="broadcast index derivation not implemented", strict=False)
-def test_broadcast_bias_matches_eager():
+def test_broadcast_bias_matches_eager(tmp_path):
     """[D] bias against [B,S,D] - needs its own offset, not the flat one."""
     model = basic.BroadcastBias().cuda()
-    fn, inputs, _ = build(model, (4, 16, 64))
+    fn, inputs, _ = build(model, (4, 16, 64), tmp_path=tmp_path)
     torch.testing.assert_close(fn(*inputs), model(*inputs))
 
 
 @pytest.mark.xfail(reason="reduction skeleton body not wired up", strict=False)
-def test_reduction_matches_eager():
+def test_reduction_matches_eager(tmp_path):
     model = basic.ReductionBoundary().cuda()
     gm = trace(model)
     x = torch.randn(4, 16, device="cuda")
     mask = torch.randint(0, 2, (4, 16), device="cuda").bool()
     specs = propagate(gm, x, mask)
     clusters, _ = detect(gm, specs)
-    kernel = emit(clusters[0], specs)
-    ns = {"torch": torch, "triton": triton, "tl": tl}
-    exec(kernel.kernel_source, ns)  # noqa: S102
-    exec(kernel.wrapper_source, ns)  # noqa: S102
-    torch.testing.assert_close(ns[kernel.name](x, mask), model(x, mask))
+    fn = load_kernel(emit(clusters[0], specs), tmp_path)
+    torch.testing.assert_close(fn(x, mask), model(x, mask))
