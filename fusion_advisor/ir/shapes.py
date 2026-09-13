@@ -6,6 +6,10 @@ import torch
 from torch.fx.passes.shape_prop import ShapeProp, TensorMetadata
 
 
+class ShapePropError(Exception):
+    """Model failed to run on the example input."""
+
+
 @dataclass(frozen=True)
 class Dim:
     """One tensor dimension; always statically known."""
@@ -65,7 +69,13 @@ def from_meta(meta: TensorMetadata) -> TensorSpec:
 
 def propagate(gm: torch.fx.GraphModule, *example_inputs) -> dict[str, TensorSpec]:
     """Run ShapeProp and lift tensor_meta into TensorSpec, keyed by node name."""
-    ShapeProp(gm).propagate(*example_inputs)
+    try:
+        # catch shape/dtype bugs surface here, not at trace time
+        ShapeProp(gm).propagate(*example_inputs)
+    except Exception as e:
+        shapes = ", ".join(str(tuple(t.shape)) for t in example_inputs if hasattr(t, "shape"))
+        root = e.__cause__ or e  # ShapeProp wraps the real error in FX node repr
+        raise ShapePropError(f"Model does not run with input shape(s) {shapes}: {root}") from e
 
     # Nodes producing non-tensors (ints, tuples) get no spec and are simply absent.
     return {

@@ -63,7 +63,7 @@ class BroadcastBias(nn.Module):
 
 
 class ReductionBoundary(nn.Module):
-    """scale → mask → softmax (PRD §5 example)."""
+    """scale → mask → softmax."""
 
     def forward(self, x, mask):
         x = x * 0.125
@@ -91,6 +91,40 @@ class Untraceable(nn.Module):
         if x.sum() > 0:
             return F.relu(x)
         return x
+
+
+class ShapeBug(nn.Module):
+    """Traces fine (Proxies don't check shapes), fails at ShapeProp."""
+
+    def __init__(self):
+        super().__init__()
+        self.w = nn.Parameter(torch.randn(7, 9))
+
+    def forward(self, x):
+        return F.relu(x @ self.w)
+
+
+class MutationAfterRead(nn.Module):
+    """`h` is read by mul, THEN mutated - FX models dataflow, not mutation.
+
+    No graph edge orders mul before add_, so reordering across it silently
+    changes the result. OPAQUE stops add_ joining a cluster but not that.
+    """
+
+    def forward(self, x):
+        h = F.relu(x)
+        y = h * 2.0
+        h.add_(1.0)
+        return y + h
+
+
+class ViewAlias(nn.Module):
+    """`v` shares storage with `h`."""
+
+    def forward(self, x):
+        h = F.relu(x)
+        v = h.view(-1)
+        return v * 2.0
 
 
 class ModuleStyle(nn.Module):

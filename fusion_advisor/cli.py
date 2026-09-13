@@ -1,10 +1,7 @@
-"""`click` entry point -- wires the PRD 6 pipeline together.
+"""click entry point.
 
-    load -> trace -> shape-prop -> detect -> estimate -> report
-                                                     -> [y/n] emit -> validate -> diff
-
-Analysis is read-only and always runs. Codegen is behind the interactive prompt
-(`--yes` to skip). Validation is behind GPU availability and degrades loudly.
+load -> trace -> shape-prop -> detect -> estimate -> report
+                                     -> [y/n] emit -> validate -> diff
 """
 
 from __future__ import annotations
@@ -23,13 +20,13 @@ import click
 @click.option(
     "--vs-inductor",
     is_flag=True,
-    help="Also benchmark torch.compile on each cluster. Slow (seconds per cluster).",
+    help="Also benchmark torch.compile per cluster. Slow.",
 )
 @click.option("--out-dir", default=".", help="Where to write generated kernel files.")
 def main(
     model, model_class, input_shape, dtype, json_out, explain_rejections, yes, vs_inductor, out_dir
 ):
-    """Fusion Advisor -- epilogue-fusion analysis for PyTorch models."""
+    """Fusion Advisor - epilogue-fusion analysis for PyTorch models."""
     raise NotImplementedError
 
 
