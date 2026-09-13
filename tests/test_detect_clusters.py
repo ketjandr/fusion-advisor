@@ -1,9 +1,9 @@
-"""Tests for analysis/detect.py - end-to-end cluster detection."""
+"""Tests for analysis/detect_clusters.py - end-to-end cluster detection."""
 
 import torch
 
 from fusion_advisor.analysis.cluster import ClusterCategory, RejectionReason
-from fusion_advisor.analysis.detect import detect
+from fusion_advisor.analysis.detect_clusters import detect
 from fusion_advisor.ir.shapes import propagate
 from fusion_advisor.ir.trace import trace
 from tests.fixtures import basic
