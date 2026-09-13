@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fusion-advisor"
+version = "0.1.0"
+description = "Fusion advisor for PyTorch models: torch.fx analysis, Triton codegen, source-mapped diffs."
+requires-python = ">=3.12"  # typing.override (PEP 698)
+dependencies = [
+    "torch>=2.4",
+    "click>=8.1",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+gpu = ["triton>=3.0"]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "tabulate",  # torch.fx Graph.print_tabular() -- used by playground/
+]
+
+[project.scripts]
+fusion-advisor = "fusion_advisor.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fusion_advisor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gpu: requires a CUDA GPU and Triton"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# PLR0402 wants `from torch import nn`. `import torch.nn as nn` is the universal
+# PyTorch idiom and what every reader of this codebase will expect.
+ignore = ["PLR0402"]

@@ -1,0 +1,106 @@
+"""Terse rich console output - one line per cluster, no prose."""
+
+from __future__ import annotations
+
+from rich.console import Console
+from rich.table import Table
+
+from ..sourcemap.provenance import MappingQuality
+
+console = Console()
+
+_QUALITY_STYLE = {
+    MappingQuality.EXACT: "green",
+    MappingQuality.APPROXIMATE: "yellow",
+    MappingQuality.UNAVAILABLE: "dim",
+}
+
+
+def human_bytes(n: int) -> str:
+    """Byte count as B/KB/MB/GB."""
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def _where(rng) -> str:
+    """Line range if we mapped it, else the op chain."""
+    if rng is None or rng.start_line is None:
+        return rng.fallback_label if rng else "-"
+    if rng.start_line == rng.end_line:
+        return f"L{rng.start_line}"
+    return f"L{rng.start_line}-{rng.end_line}"
+
+
+def render_clusters(clusters, estimates, ranges=None) -> None:
+    """Per-cluster traffic table; totals are absolute bytes, never an averaged percent."""
+    if not clusters:
+        console.print("[yellow]No fusable clusters found.[/yellow]")
+        return
+
+    ranges = ranges or [None] * len(clusters)
+    table = Table(title="Fusable clusters (estimated)", title_justify="left", header_style="bold")
+    for col in ("#", "category", "ops", "unfused", "fused", "saved", "map", "where"):
+        table.add_column(col, justify="right" if col in ("unfused", "fused", "saved") else "left")
+
+    for c, est, rng in zip(clusters, estimates, ranges, strict=True):
+        quality = rng.quality if rng else None
+        table.add_row(
+            str(c.index),
+            c.category.value,
+            str(len(c.nodes)),
+            human_bytes(est.unfused_bytes),
+            human_bytes(est.fused_bytes),
+            f"{est.savings_ratio:.0%}",
+            f"[{_QUALITY_STYLE[quality]}]{quality.value}[/]" if quality else "-",
+            _where(rng),
+        )
+    console.print(table)
+
+    saved = sum(e.unfused_bytes - e.fused_bytes for e in estimates)
+    total = sum(e.unfused_bytes for e in estimates)
+    console.print(
+        f"Across {len(clusters)} cluster(s): {human_bytes(saved)} of {human_bytes(total)} "
+        f"cluster-local traffic avoided.",
+        style="dim",
+    )
+    console.print("Estimates are a DRAM upper bound with no cache model.", style="dim italic")
+
+
+def render_rejections(rejections) -> None:
+    """--explain-rejections: why candidates were refused."""
+    if not rejections:
+        console.print("No rejected candidates.", style="dim")
+        return
+
+    table = Table(title="Rejected candidates", title_justify="left", header_style="bold")
+    table.add_column("ops")
+    table.add_column("reason", style="yellow")
+    for r in rejections:
+        table.add_row(", ".join(n.name for n in r.nodes), r.reason.value)
+    console.print(table)
+
+
+def render_diff(cluster_diff) -> None:
+    """Red/green replacement for one cluster."""
+    if cluster_diff is None:
+        return
+    d = cluster_diff
+    console.print(f"\n[bold]{d.file}[/bold]:{d.start_line}-{d.end_line}")
+    for line in d.removed:
+        console.print(f"[red]- {line}[/red]")
+    for line in d.added:
+        console.print(f"[green]+ {line}[/green]")
+
+
+def render_unmapped(cluster, rng) -> None:
+    """Why a cluster got no diff, so a missing diff never looks like a crash."""
+    reason = (
+        "no user source frame"
+        if rng.quality is MappingQuality.UNAVAILABLE
+        else "line range holds code outside the cluster, or spans two functions"
+    )
+    console.print(f"\ncluster {cluster.index} ({_where(rng)}): no safe diff - {reason}", style="dim")
