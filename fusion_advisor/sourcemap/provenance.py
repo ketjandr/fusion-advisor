@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -86,6 +87,40 @@ def _label(nodes) -> str:
     """Cluster name for when there is no diff to show."""
     head = " -> ".join(_op_name(n) for n in nodes[:3])
     return head + " -> ..." if len(nodes) > 3 else head
+
+
+def _assign_target(line: str) -> str | None:
+    """Single-name assignment target of a source line, else None."""
+    try:
+        stmt = ast.parse(line.strip()).body[0]
+    except (SyntaxError, IndexError):
+        return None
+    if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+        t = stmt.targets[0]
+        return t.id if isinstance(t, ast.Name) else None
+    return None
+
+
+def user_variable_names(all_nodes, source_text: str) -> dict:
+    """fx node -> the variable the user bound it to, only where provable."""
+    lines = source_text.splitlines()
+    names, by_line = {}, {}
+
+    for n in all_nodes:
+        if n.op == "placeholder":
+            names[n] = n.name  # a placeholder's fx name is the parameter name
+            continue
+        f = deepest_user_frame(getattr(n, "stack_trace", None))
+        if f and 1 <= f.line <= len(lines):
+            by_line.setdefault(f.line, []).append(n)
+
+    # only the last node on a line produces that line's value, e.g. h = act(fc(x))
+    # binds h to the activation, not to the inner call
+    for line_no, line_nodes in by_line.items():
+        target = _assign_target(lines[line_no - 1])
+        if target:
+            names[line_nodes[-1]] = target
+    return names
 
 
 def resolve(cluster, all_nodes) -> SourceRange:

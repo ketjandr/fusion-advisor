@@ -37,10 +37,22 @@ def _replacement(last_line: str, call_expr: str) -> str:
     return f"{indent}{call_expr}"
 
 
-def build(source_range, kernel, source_text: str) -> ClusterDiff | None:
+def call_expression(kernel, cluster, names: dict) -> str | None:
+    """Kernel call spelled in the user's own variables, or None if one is unknown."""
+    args = []
+    for n in cluster.inputs:
+        if n not in names:
+            return None  # fx names like `linear` are not in scope in the user's code
+        args.append(names[n])
+    return f"{kernel.name}({', '.join(args)})"
+
+
+def build(source_range, kernel, source_text: str, call_expr: str | None = None) -> ClusterDiff | None:
     """None unless EXACT; a wrong diff is an edit someone applies."""
     if source_range.quality is not MappingQuality.EXACT:
         return None
+    if call_expr is None:
+        call_expr = kernel.call_expr
 
     lines = source_text.splitlines()
     start, end = source_range.start_line, source_range.end_line
@@ -53,5 +65,5 @@ def build(source_range, kernel, source_text: str) -> ClusterDiff | None:
         start_line=start,
         end_line=end,
         removed=removed,
-        added=[_replacement(removed[-1], kernel.call_expr)],
+        added=[_replacement(removed[-1], call_expr)],
     )
