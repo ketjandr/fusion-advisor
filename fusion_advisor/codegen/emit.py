@@ -119,8 +119,8 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
     ]
     wrapper_src = "\n".join(wrapper_lines)
 
-    call_args = ", ".join(in_args)
-    call_expr = f"{name}({call_args})"
+    # diff-facing, so use fx node names (a placeholder's name is the user's variable)
+    call_expr = f"{name}({', '.join(n.name for n in external_inputs)})"
 
     return GeneratedKernel(
         name=name,
