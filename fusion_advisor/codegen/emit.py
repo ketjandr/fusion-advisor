@@ -7,7 +7,6 @@ import torch.fx as fx
 from fusion_advisor.ir.op_registry import OpCategory, classify, reduction_axis
 
 from ..analysis.cluster import ClusterCategory, FusableCluster
-from ..analysis.legality import escaping_nodes
 from .lowering import lower
 from .skeleton import ELEMENTWISE_SKELETON, REDUCTION_SKELETON
 
@@ -39,27 +38,17 @@ def _indent(lines: list[str], spaces: int = 4) -> str:
 def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
     """Emit a Triton kernel + wrapper for one cluster."""
     nodes = cluster.nodes
-    cluster_set = set(nodes)
-    escaping = escaping_nodes(nodes)
+    inputs, escaping = cluster.inputs, cluster.outputs
     name = f"cluster{cluster.index}"
 
     # assign variable names
     node_to_var: dict[fx.Node, str] = {}
     var_count = 0
 
-    # external inputs: cluster node args that come from outside
-    external_inputs: list[fx.Node] = []
-    seen_inputs: set[fx.Node] = set()
-    for n in nodes:
-        for a in n.args:
-            if isinstance(a, fx.Node) and a not in cluster_set and a not in seen_inputs:
-                seen_inputs.add(a)
-                external_inputs.append(a)
-
     # tl.load lines (one per external input)
     load_lines: list[str] = []
     in_ptrs: list[str] = []
-    for i, inp in enumerate(external_inputs):
+    for i, inp in enumerate(inputs):
         ptr = f"in_ptr{i}"
         var = f"v{var_count}"
         in_ptrs.append(ptr)
@@ -113,14 +102,14 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
         f"def {name}({', '.join(in_args)}):",
         f"    out0 = torch.empty_like({in_args[0]})",
         f"    n = {in_args[0]}.numel()",
-        f"    grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)",
+        "    grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)",
         f"    {name}_kernel[grid]({', '.join(in_args)}, out0, n, BLOCK_SIZE=1024)",
-        f"    return out0",
+        "    return out0",
     ]
     wrapper_src = "\n".join(wrapper_lines)
 
     # diff-facing, so use fx node names (a placeholder's name is the user's variable)
-    call_expr = f"{name}({', '.join(n.name for n in external_inputs)})"
+    call_expr = f"{name}({', '.join(n.name for n in inputs)})"
 
     return GeneratedKernel(
         name=name,

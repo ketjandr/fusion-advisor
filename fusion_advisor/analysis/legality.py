@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import torch.fx as fx
 
 from ..ir.shapes import Dim
 from .cluster import RejectionReason
@@ -21,6 +22,21 @@ def escaping_nodes(cluster_nodes) -> list:
     """
     inside = set(cluster_nodes)
     return [n for n in cluster_nodes if any(u not in inside for u in n.users)]
+
+
+def external_inputs(cluster_nodes) -> list:
+    """Distinct values the kernel must load, in first-use order.
+
+    Deduplicated: two members reading the same tensor is one load, not two.
+    """
+    inside = set(cluster_nodes)
+    seen, out = set(), []
+    for n in cluster_nodes:
+        for a in n.args:
+            if isinstance(a, fx.Node) and a not in inside and a not in seen:
+                seen.add(a)
+                out.append(a)
+    return out
 
 
 def check_fan_out(cluster_nodes) -> RejectionReason | None:

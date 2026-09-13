@@ -158,6 +158,13 @@ class HasUnlistedModule(nn.Module):
         return self.act(x + a)
 
 
+class SharedInput(nn.Module):
+    """x feeds both members - one load, not two."""
+
+    def forward(self, x):
+        return x * 2.0 + x
+
+
 class ChainedOneLiner(nn.Module):
     """Every op on one line - the line also holds a matmul, so no safe diff."""
 

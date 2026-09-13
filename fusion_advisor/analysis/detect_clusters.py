@@ -6,7 +6,14 @@ import torch.fx as fx
 
 from ..ir.op_registry import OpCategory, classify
 from .cluster import ClusterCategory, FusableCluster, RejectedCandidate
-from .legality import check_aliasing, check_convexity, check_fan_out, check_shapes
+from .legality import (
+    check_aliasing,
+    check_convexity,
+    check_fan_out,
+    check_shapes,
+    escaping_nodes,
+    external_inputs,
+)
 
 
 def _category_for(candidate: list[fx.Node]) -> ClusterCategory:
@@ -85,6 +92,8 @@ def detect(gm, specs) -> tuple[list[FusableCluster], list[RejectedCandidate]]:
                 index=len(clusters),
                 category=_category_for(component),
                 nodes=component,
+                inputs=external_inputs(component),
+                outputs=escaping_nodes(component),
             ))
         else:
             rejected.append(RejectedCandidate(nodes=component, reason=reason))
