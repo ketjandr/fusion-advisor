@@ -85,6 +85,30 @@ def test_backward_stub_raises_rather_than_detaching(tmp_path):
         (fn(x) + x).sum().backward()
 
 
+def test_validate_end_to_end():
+    """compile -> cluster numerics -> model numerics -> benchmark, on real hardware."""
+    from fusion_advisor.validate.bench import validate
+
+    model = basic.ElementwiseChain().cuda()
+    gm = trace(model)
+    x = torch.randn(512, 1024, device="cuda")  # 2 MB, past launch-bound
+    specs = propagate(gm, x)
+    clusters, _ = detect(gm, specs)
+
+    result = validate(emit(clusters[0], specs), clusters[0], gm, specs)
+    assert result.usable, result.skipped_reason
+    assert result.max_abs_err < 1e-4
+
+    b = result.benchmark
+    print(
+        f"\n  {b.regime.value}  {b.working_set_bytes / 1e6:.1f} MB"
+        f"\n  cluster {b.cluster_speedup:.2f}x   ({b.cluster_fused.achieved_gbps:.0f} GB/s,"
+        f" {b.cluster_fused.pct_of_peak:.0f}% of peak)"
+        f"\n  model   {b.model_speedup:.2f}x"
+    )
+    assert b.cluster_fused.median_ms > 0
+
+
 @pytest.mark.xfail(reason="broadcast index derivation not implemented", strict=False)
 def test_broadcast_bias_matches_eager(tmp_path):
     """[D] bias against [B,S,D] - needs its own offset, not the flat one."""
