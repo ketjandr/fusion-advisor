@@ -5,7 +5,6 @@ import torch
 from ..ir.shapes import Dim
 from .cluster import RejectionReason
 
-
 _VIEW_METHODS = {
     "view", "reshape", "transpose", "permute", "unsqueeze", "squeeze",
     "expand", "narrow", "unflatten", "flatten", "t",
