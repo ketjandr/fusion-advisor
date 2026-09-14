@@ -61,7 +61,7 @@ def _write_kernel(out_dir: Path, kernel) -> Path:
     return path
 
 
-def _measure(clusters, kernels, gm, specs, vs_inductor: bool) -> list:
+def _measure(clusters, kernels, gm, specs, vs_inductor: bool, peak_gbps: float | None) -> list:
     """Compile, verify and benchmark each kernel; None per cluster without a GPU."""
     if not gpu_available():
         report.console.print(
@@ -75,7 +75,9 @@ def _measure(clusters, kernels, gm, specs, vs_inductor: bool) -> list:
         if kernel is None:  # emit failed, nothing to measure
             results.append(None)
             continue
-        result = validate(kernel, c, gm, specs, vs_inductor=vs_inductor)
+        result = validate(
+            kernel, c, gm, specs, vs_inductor=vs_inductor, peak_gbps=peak_gbps
+        )
         report.render_validation(c, result)
         results.append(result)
     return results
@@ -132,6 +134,12 @@ def _apply_edits(loaded, kernels, diffs) -> None:
     is_flag=True,
     help="Also benchmark torch.compile per cluster.",
 )
+@click.option(
+    "--peak-gbps",
+    type=click.FloatRange(min=0.0, min_open=True),
+    default=None,
+    help="Override detected peak GPU memory bandwidth in GB/s.",
+)
 @click.option("--out-dir", default=".", help="Where to write generated kernel files.")
 @click.option(
     "--apply",
@@ -144,7 +152,7 @@ def _apply_edits(loaded, kernels, diffs) -> None:
 )
 def main(
     model, model_class, input_shape, dtype, json_out, explain_rejections, vs_inductor,
-    out_dir, apply_edits,
+    peak_gbps, out_dir, apply_edits,
 ):
     """Fusion Advisor: static fusion analysis for PyTorch models."""
     try:
@@ -202,7 +210,7 @@ def main(
         if apply_edits:
             _apply_edits(loaded, kernels, diffs)
 
-    validations = _measure(clusters, kernels, gm, specs, vs_inductor)
+    validations = _measure(clusters, kernels, gm, specs, vs_inductor, peak_gbps)
 
     if json_out:
         payload = build_payload(

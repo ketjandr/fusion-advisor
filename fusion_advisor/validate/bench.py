@@ -18,10 +18,6 @@ from .harness import allocate_inputs, extract_subgraph, rewrite_with_kernel, wor
 
 KERNEL_HEADER = "import torch\nimport triton\nimport triton.language as tl\n\n"
 
-# The one hardware-specific number here. Spec sheet, not measured, so treat
-# pct_of_peak as a ceiling check rather than an exact efficiency figure.
-PEAK_GBPS = 272.0
-
 # Overhead is at most 1/N of a measurement N times the launch floor.
 LAUNCH_BOUND_MULTIPLE = 3
 
@@ -80,12 +76,6 @@ class Timing:
     p80_ms: float
     achieved_gbps: float  # bytes_moved / median
 
-    @property
-    def pct_of_peak(self) -> float:
-        """Against device peak bandwidth; the real quality metric for a memory-bound kernel."""
-        return 100.0 * self.achieved_gbps / PEAK_GBPS
-
-
 @dataclass
 class BenchmarkResult:
     regime: CacheRegime
@@ -97,6 +87,9 @@ class BenchmarkResult:
     # Always much smaller than cluster-local (Amdahl). Lead with this one.
     model_eager: Timing | None
     model_patched: Timing | None
+
+    peak_gbps: float | None = None
+    peak_source: str | None = None
 
     # Opt-in via --vs-inductor: costs seconds of compile per cluster, and an
     # Inductor column in every run frames this as a competitor to a compiler.
@@ -119,6 +112,12 @@ class BenchmarkResult:
             return None
         return self.cluster_inductor.median_ms / self.cluster_fused.median_ms
 
+    @property
+    def pct_of_peak(self) -> float | None:
+        if self.peak_gbps is None:
+            return None
+        return 100.0 * self.cluster_fused.achieved_gbps / self.peak_gbps
+
 
 @dataclass
 class ValidationResult:
@@ -139,6 +138,20 @@ def gpu_available() -> bool:
     if not torch.cuda.is_available():
         return False
     return importlib.util.find_spec("triton") is not None
+
+
+def detect_peak_gbps(device: int | None = None) -> float | None:
+    """Theoretical DRAM bandwidth from CUDA clock (kHz) and bus width (bits)."""
+    if not torch.cuda.is_available():
+        return None
+    props = torch.cuda.get_device_properties(
+        torch.cuda.current_device() if device is None else device
+    )
+    clock_khz = getattr(props, "memory_clock_rate", None)
+    bus_bits = getattr(props, "memory_bus_width", None)
+    if not clock_khz or not bus_bits:
+        return None
+    return 2.0 * clock_khz * 1_000 * (bus_bits / 8) / 1e9
 
 
 def compile_kernel(kernel, out_dir: Path | None = None):
@@ -209,7 +222,8 @@ def _model_inputs(gm, specs, device="cuda") -> list[torch.Tensor]:
 
 
 def validate(
-    kernel, cluster, gm, specs, *, atol=1e-4, rtol=1e-4, vs_inductor=False
+    kernel, cluster, gm, specs, *, atol=1e-4, rtol=1e-4, vs_inductor=False,
+    peak_gbps=None,
 ) -> ValidationResult:
     """Compile, check numerics, then benchmark - the first three gate the fourth."""
     if not gpu_available():
@@ -254,6 +268,8 @@ def validate(
 
     nbytes = working_set_bytes(cluster, specs)
     cluster_fused = time_fn(fused, args, nbytes)
+    configured_peak = peak_gbps is not None
+    peak_gbps = peak_gbps if configured_peak else detect_peak_gbps()
     return ValidationResult(
         compiled=True,
         numerics_ok=True,
@@ -267,6 +283,8 @@ def validate(
             cluster_fused=cluster_fused,
             model_eager=time_fn(gm, model_inputs, nbytes),
             model_patched=time_fn(patched, model_inputs, nbytes),
+            peak_gbps=peak_gbps,
+            peak_source=("configured" if configured_peak else "detected") if peak_gbps else None,
             cluster_inductor=time_compiled(reference, args, nbytes) if vs_inductor else None,
             model_inductor=time_compiled(gm, model_inputs, nbytes) if vs_inductor else None,
         ),

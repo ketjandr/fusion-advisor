@@ -38,7 +38,9 @@ def _validation_payload(v) -> dict | None:
             "cluster_speedup": round(b.cluster_speedup, 4),
             "model_speedup": None if b.model_speedup is None else round(b.model_speedup, 4),
             "achieved_gbps": round(b.cluster_fused.achieved_gbps, 1),
-            "pct_of_peak": round(b.cluster_fused.pct_of_peak, 1),
+            "peak_gbps": b.peak_gbps,
+            "peak_source": b.peak_source,
+            "pct_of_peak": None if b.pct_of_peak is None else round(b.pct_of_peak, 1),
             "vs_inductor": None if b.vs_inductor is None else round(b.vs_inductor, 4),
         },
     }

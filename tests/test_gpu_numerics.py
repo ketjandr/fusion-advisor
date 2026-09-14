@@ -144,7 +144,7 @@ def test_validate_end_to_end():
     print(
         f"\n  {b.regime.value}  {b.working_set_bytes / 1e6:.1f} MB"
         f"\n  cluster {b.cluster_speedup:.2f}x   ({b.cluster_fused.achieved_gbps:.0f} GB/s,"
-        f" {b.cluster_fused.pct_of_peak:.0f}% of peak)"
+        f" {b.pct_of_peak:.0f}% of peak)"
         f"\n  model   {b.model_speedup:.2f}x"
     )
     assert b.cluster_fused.median_ms > 0

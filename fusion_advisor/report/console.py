@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..sourcemap.provenance import MappingQuality
-from ..validate.bench import PEAK_GBPS, CacheRegime
+from ..validate.bench import CacheRegime
 
 console = Console(highlight=False)  # auto-styling splits "2.00x" across colour codes
 
@@ -137,12 +137,20 @@ def render_validation(cluster, result) -> None:
         )
         return
 
+    bandwidth = f"fused cluster bandwidth {b.cluster_fused.achieved_gbps:.0f} GB/s"
+    if b.peak_gbps is not None:
+        bandwidth += (
+            f" ({b.pct_of_peak:.0f}% of {b.peak_gbps:.0f} GB/s "
+            f"{b.peak_source} peak memory bandwidth)"
+        )
+    else:
+        bandwidth += " (peak unavailable; pass --peak-gbps)"
+
     console.print(
         f"  {b.regime.value}  {human_bytes(b.working_set_bytes)}  "
         f"fused cluster speedup [bold]{b.cluster_speedup:.2f}x[/bold]  "
         f"model speedup [bold]{b.model_speedup:.2f}x[/bold]  "
-        f"fused cluster bandwidth {b.cluster_fused.achieved_gbps:.0f} GB/s "
-        f"({b.cluster_fused.pct_of_peak:.0f}% of {PEAK_GBPS:.0f} GB/s peak memory bandwidth)"
+        f"{bandwidth}"
     )
     if b.cluster_inductor is not None:
         # >1 means our kernel beat what torch.compile produced

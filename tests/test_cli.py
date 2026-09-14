@@ -314,3 +314,26 @@ def test_vs_inductor_defaults_off(runner, tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "gpu_available", lambda: True)
     run(runner, tmp_path, MODEL, "--input-shape", "4,64", "--out-dir", str(tmp_path))
     assert seen["vs_inductor"] is False
+
+
+def test_peak_gbps_override_reaches_validate(runner, tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_validate(kernel, cluster, gm, specs, **kw):
+        seen.update(kw)
+        return SimpleNamespace(skipped_reason="stubbed", usable=False, benchmark=None)
+
+    monkeypatch.setattr(cli, "validate", fake_validate)
+    monkeypatch.setattr(cli, "gpu_available", lambda: True)
+    run(
+        runner,
+        tmp_path,
+        MODEL,
+        "--input-shape",
+        "4,64",
+        "--out-dir",
+        str(tmp_path),
+        "--peak-gbps",
+        "504.2",
+    )
+    assert seen["peak_gbps"] == 504.2

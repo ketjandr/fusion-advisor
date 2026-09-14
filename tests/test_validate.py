@@ -11,6 +11,7 @@ from fusion_advisor.validate.bench import (
     CacheRegime,
     Timing,
     ValidationResult,
+    detect_peak_gbps,
     gpu_available,
     validate,
 )
@@ -167,10 +168,30 @@ def test_speedups_are_eager_over_fused():
         cluster_fused=timing(1.0),
         model_eager=timing(10.0),
         model_patched=timing(8.0),
+        peak_gbps=4.0,
+        peak_source="configured",
     )
     assert r.cluster_speedup == 2.0
     assert r.model_speedup == 1.25
+    assert r.pct_of_peak == 25.0
     assert r.vs_inductor is None  # opt-in, absent by default
+
+
+def test_detects_peak_memory_bandwidth_from_cuda_properties(monkeypatch):
+    props = SimpleNamespace(memory_clock_rate=8_500_000, memory_bus_width=128)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 2)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: props)
+    assert detect_peak_gbps() == 272.0
+
+
+def test_peak_memory_bandwidth_detection_can_be_unavailable(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
+    monkeypatch.setattr(
+        torch.cuda, "get_device_properties", lambda device: SimpleNamespace()
+    )
+    assert detect_peak_gbps() is None
 
 
 def test_usable_requires_compiled_and_verified():
@@ -193,6 +214,8 @@ def fake_result(regime, *, usable=True, eager=2.0, fused=1.0):
         cluster_fused=timing(fused),
         model_eager=timing(eager),
         model_patched=timing(fused),
+        peak_gbps=272.0,
+        peak_source="configured",
     )
     return ValidationResult(True, usable, usable, 1e-6, bench)
 
@@ -234,6 +257,8 @@ def test_validation_payload_is_json_serializable():
     json.dumps(payload)  # must not raise
     assert payload["benchmark"]["regime"] == "dram-bound"
     assert payload["benchmark"]["cluster_speedup"] == 2.0
+    assert payload["benchmark"]["peak_gbps"] == 272.0
+    assert payload["benchmark"]["peak_source"] == "configured"
     assert payload["usable"] is True
     assert _validation_payload(None) is None
 
