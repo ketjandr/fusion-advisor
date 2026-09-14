@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..sourcemap.provenance import MappingQuality
-from ..validate.bench import CacheRegime
+from ..validate.bench import PEAK_GBPS, CacheRegime
 
 console = Console(highlight=False)  # auto-styling splits "2.00x" across colour codes
 
@@ -43,9 +43,23 @@ def render_clusters(clusters, estimates, ranges=None) -> None:
         return
 
     ranges = ranges or [None] * len(clusters)
-    table = Table(title="Fusable clusters (estimated)", title_justify="left", header_style="bold")
-    for col in ("#", "category", "ops", "unfused", "fused", "saved", "map", "where"):
-        table.add_column(col, justify="right" if col in ("unfused", "fused", "saved") else "left")
+    table = Table(
+        title="Fusable clusters (estimated memory traffic)",
+        title_justify="left",
+        header_style="",
+    )
+    columns = (
+        ("#", "left"),
+        ("category", "left"),
+        ("ops", "left"),
+        ("traffic\n(unfused)", "right"),
+        ("traffic\n(fused)", "right"),
+        ("traffic\nsaved", "right"),
+        ("map", "left"),
+        ("lines", "left"),
+    )
+    for name, justify in columns:
+        table.add_column(name, justify=justify)
 
     for c, est, rng in zip(clusters, estimates, ranges, strict=True):
         quality = rng.quality if rng else None
@@ -125,9 +139,10 @@ def render_validation(cluster, result) -> None:
 
     console.print(
         f"  {b.regime.value}  {human_bytes(b.working_set_bytes)}  "
-        f"cluster [bold]{b.cluster_speedup:.2f}x[/bold]  "
-        f"model [bold]{b.model_speedup:.2f}x[/bold]  "
-        f"({b.cluster_fused.achieved_gbps:.0f} GB/s, {b.cluster_fused.pct_of_peak:.0f}% of peak)"
+        f"cluster speedup [bold]{b.cluster_speedup:.2f}x[/bold]  "
+        f"end-to-end model speedup [bold]{b.model_speedup:.2f}x[/bold]  "
+        f"fused-kernel bandwidth {b.cluster_fused.achieved_gbps:.0f} GB/s "
+        f"({b.cluster_fused.pct_of_peak:.0f}% of {PEAK_GBPS:.0f} GB/s peak memory bandwidth)"
     )
     if b.cluster_inductor is not None:
         # >1 means our kernel beat what torch.compile produced

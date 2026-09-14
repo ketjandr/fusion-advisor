@@ -211,7 +211,10 @@ def test_dram_bound_result_prints_the_speedup(capsys):
     from fusion_advisor.report.console import render_validation
 
     render_validation(SimpleNamespace(index=0), fake_result(CacheRegime.DRAM_BOUND))
-    assert "2.00x" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "cluster speedup 2.00x" in out
+    assert "end-to-end model speedup 2.00x" in out
+    assert "peak memory bandwidth" in out
 
 
 def test_failed_numerics_is_reported_loudly(capsys):

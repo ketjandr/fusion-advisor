@@ -86,6 +86,8 @@ def test_happy_path(runner, tmp_path):
     assert r.exit_code == 0, r.output
     assert "elementwise-chain" in r.output
     assert "Net" in r.output
+    assert "estimated memory traffic" in r.output
+    assert "traffic" in r.output and "saved" in r.output
 
 
 def test_writes_kernel_file(runner, tmp_path):
