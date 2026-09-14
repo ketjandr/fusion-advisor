@@ -84,13 +84,14 @@ def test_same_shape_as():
     assert not a.same_shape_as(c)
 
 
-def test_shape_bug_traces_but_fails_at_shapeprop():
+def test_shape_bug_traces_but_fails_at_shapeprop(capsys):
     """Proxies don't check shapes, so the bug only surfaces when the model runs."""
     gm = trace(basic.ShapeBug())  # no error here
     with pytest.raises(ShapePropError) as exc:
         propagate(gm, torch.randn(4, 8))
     assert "(4, 8)" in str(exc.value), "name the input shape"
     assert exc.value.__cause__ is not None
+    assert "Traceback" not in capsys.readouterr().err
 
 
 def test_inplace_and_view_are_opaque():

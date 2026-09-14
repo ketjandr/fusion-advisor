@@ -40,6 +40,19 @@ class Dyn(nn.Module):
         return x
 """
 
+SHAPE_MISMATCH = """
+import torch
+import torch.nn as nn
+
+class BadShape(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(7, 9))
+
+    def forward(self, x):
+        return x @ self.weight
+"""
+
 NOTHING_TO_FUSE = """
 import torch
 import torch.nn as nn
@@ -167,6 +180,14 @@ def test_bad_shape_is_a_clean_error(runner, tmp_path):
     r = run(runner, tmp_path, MODEL, "--input-shape", "4,zzz")
     assert r.exit_code != 0
     assert "Bad shape" in r.output
+
+
+def test_model_shape_mismatch_does_not_leak_fx_traceback(runner, tmp_path):
+    r = run(runner, tmp_path, SHAPE_MISMATCH, "--input-shape", "4,8")
+    assert r.exit_code != 0
+    assert "Model does not run with input shape(s) (4, 8)" in r.output
+    assert "cannot be multiplied" in r.output
+    assert "Traceback" not in r.output
 
 
 def test_missing_required_options(runner):

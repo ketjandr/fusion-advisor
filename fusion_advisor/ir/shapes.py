@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import contextlib
+import io
+import sys
 from dataclasses import dataclass
 
 import torch
@@ -69,13 +72,20 @@ def from_meta(meta: TensorMetadata) -> TensorSpec:
 
 def propagate(gm: torch.fx.GraphModule, *example_inputs) -> dict[str, TensorSpec]:
     """Run ShapeProp and lift tensor_meta into TensorSpec, keyed by node name."""
+    # guard against shape mismatch in stderr
+    captured_stderr = io.StringIO()
     try:
         # catch shape/dtype bugs surface here, not at trace time
-        ShapeProp(gm).propagate(*example_inputs)
+        with contextlib.redirect_stderr(captured_stderr):
+            ShapeProp(gm).propagate(*example_inputs)
     except Exception as e:
         shapes = ", ".join(str(tuple(t.shape)) for t in example_inputs if hasattr(t, "shape"))
         root = e.__cause__ or e  # ShapeProp wraps the real error in FX node repr
         raise ShapePropError(f"Model does not run with input shape(s) {shapes}: {root}") from e
+    else:
+        diagnostics = captured_stderr.getvalue()
+        if diagnostics:
+            sys.stderr.write(diagnostics)
 
     # Nodes producing non-tensors (ints, tuples) get no spec and are simply absent.
     return {
