@@ -18,8 +18,7 @@ from .harness import allocate_inputs, extract_subgraph, rewrite_with_kernel, wor
 
 KERNEL_HEADER = "import torch\nimport triton\nimport triton.language as tl\n\n"
 
-# Overhead is at most 1/N of a measurement N times the launch floor.
-LAUNCH_BOUND_MULTIPLE = 3
+LAUNCH_BOUND_MULTIPLE = 1.5
 
 # Only used when no measurement is available.
 LAUNCH_BOUND_BYTES = 16 << 20
