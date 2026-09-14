@@ -61,7 +61,7 @@ def _write_kernel(out_dir: Path, kernel) -> Path:
     return path
 
 
-def _measure(clusters, kernels, gm, specs) -> list:
+def _measure(clusters, kernels, gm, specs, vs_inductor: bool) -> list:
     """Compile, verify and benchmark each kernel; None per cluster without a GPU."""
     if not gpu_available():
         report.console.print(
@@ -75,7 +75,7 @@ def _measure(clusters, kernels, gm, specs) -> list:
         if kernel is None:  # emit failed, nothing to measure
             results.append(None)
             continue
-        result = validate(kernel, c, gm, specs)
+        result = validate(kernel, c, gm, specs, vs_inductor=vs_inductor)
         report.render_validation(c, result)
         results.append(result)
     return results
@@ -200,10 +200,7 @@ def main(
         if apply_edits:
             _apply_edits(loaded, kernels, diffs, yes)
 
-    validations = _measure(clusters, kernels, gm, specs)
-
-    if vs_inductor:
-        report.console.print("\n--vs-inductor is not implemented yet; skipped.", style="yellow")
+    validations = _measure(clusters, kernels, gm, specs, vs_inductor)
 
     if json_out:
         payload = build_payload(

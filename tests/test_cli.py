@@ -4,10 +4,12 @@ import ast
 import json
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
 
+from fusion_advisor import cli
 from fusion_advisor.cli import KERNEL_MODULE, main
 
 MODEL = """
@@ -254,9 +256,29 @@ def test_says_why_it_did_not_measure(runner, tmp_path):
     assert "Not measured" in r.output
 
 
-def test_vs_inductor_is_still_a_stub(runner, tmp_path):
-    """The flag parses but does nothing yet; it must say so rather than stay silent."""
-    r = run(runner, tmp_path, MODEL, "--input-shape", "4,64", "--yes",
-            "--out-dir", str(tmp_path), "--vs-inductor")
-    assert r.exit_code == 0, r.output
-    assert "not implemented" in r.output
+def test_vs_inductor_reaches_validate(runner, tmp_path, monkeypatch):
+    """The flag is opt-in because each torch.compile costs seconds."""
+    seen = {}
+
+    def fake_validate(kernel, cluster, gm, specs, **kw):
+        seen.update(kw)
+        return SimpleNamespace(skipped_reason="stubbed", usable=False, benchmark=None)
+
+    monkeypatch.setattr(cli, "validate", fake_validate)
+    monkeypatch.setattr(cli, "gpu_available", lambda: True)
+    run(runner, tmp_path, MODEL, "--input-shape", "4,64", "--yes",
+        "--out-dir", str(tmp_path), "--vs-inductor")
+    assert seen["vs_inductor"] is True
+
+
+def test_vs_inductor_defaults_off(runner, tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_validate(kernel, cluster, gm, specs, **kw):
+        seen.update(kw)
+        return SimpleNamespace(skipped_reason="stubbed", usable=False, benchmark=None)
+
+    monkeypatch.setattr(cli, "validate", fake_validate)
+    monkeypatch.setattr(cli, "gpu_available", lambda: True)
+    run(runner, tmp_path, MODEL, "--input-shape", "4,64", "--yes", "--out-dir", str(tmp_path))
+    assert seen["vs_inductor"] is False

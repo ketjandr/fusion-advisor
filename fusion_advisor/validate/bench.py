@@ -189,6 +189,15 @@ def time_fn(fn, args, bytes_moved: int, warmup: int = 25, iters: int = 100) -> T
     )
 
 
+def time_compiled(module, args, bytes_moved: int) -> Timing | None:
+    """torch.compile the eager side and time it; None if it will not compile."""
+    try:
+        # dynamo raises at call time, not compile time, so time_fn is inside the try
+        return time_fn(torch.compile(module), args, bytes_moved)
+    except Exception:  # noqa: BLE001 - inductor raises many types; a failure just means no column
+        return None
+
+
 def _model_inputs(gm, specs, device="cuda") -> list[torch.Tensor]:
     """Tensors for the whole model's placeholders."""
     placeholders = [n for n in gm.graph.nodes if n.op == "placeholder"]
@@ -197,7 +206,9 @@ def _model_inputs(gm, specs, device="cuda") -> list[torch.Tensor]:
     )
 
 
-def validate(kernel, cluster, gm, specs, *, atol=1e-4, rtol=1e-4) -> ValidationResult:
+def validate(
+    kernel, cluster, gm, specs, *, atol=1e-4, rtol=1e-4, vs_inductor=False
+) -> ValidationResult:
     """Compile, check numerics, then benchmark - the first three gate the fourth."""
     if not gpu_available():
         return ValidationResult(False, None, None, None, None, "no CUDA GPU or triton")
@@ -242,5 +253,7 @@ def validate(kernel, cluster, gm, specs, *, atol=1e-4, rtol=1e-4) -> ValidationR
             cluster_fused=cluster_fused,
             model_eager=time_fn(gm, model_inputs, nbytes),
             model_patched=time_fn(patched, model_inputs, nbytes),
+            cluster_inductor=time_compiled(reference, args, nbytes) if vs_inductor else None,
+            model_inductor=time_compiled(gm, model_inputs, nbytes) if vs_inductor else None,
         ),
     )

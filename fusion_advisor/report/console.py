@@ -129,6 +129,9 @@ def render_validation(cluster, result) -> None:
         f"model [bold]{b.model_speedup:.2f}x[/bold]  "
         f"({b.cluster_fused.achieved_gbps:.0f} GB/s, {b.cluster_fused.pct_of_peak:.0f}% of peak)"
     )
+    if b.cluster_inductor is not None:
+        # >1 means our kernel beat what torch.compile produced
+        console.print(f"  vs torch.compile: [bold]{b.vs_inductor:.2f}x[/bold]", style="dim")
 
 
 def render_unmapped(cluster, rng) -> None:
