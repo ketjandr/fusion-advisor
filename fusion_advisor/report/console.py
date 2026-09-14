@@ -46,7 +46,8 @@ def render_clusters(clusters, estimates, ranges=None) -> None:
     table = Table(
         title="Fusable clusters (estimated memory traffic)",
         title_justify="left",
-        header_style="",
+        header_style="bold",
+        border_style="dim",
     )
     columns = (
         ("#\n", "left"),
