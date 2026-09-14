@@ -108,11 +108,13 @@ def build_pipeline(src, shape, tmp_path):
 
 
 def test_intermediate_gets_its_user_variable(tmp_path):
-    """`h = self.fc(x)` binds the linear node to `h`, not to fx's `linear`."""
+    """`h = self.fc(x)` binds `h` to the bias-add, the value the line produces."""
     _, _, all_nodes, src = build_pipeline(MODEL, (4, 32), tmp_path)
     names = user_variable_names(all_nodes, src)
-    linear = next(n for n in all_nodes if n.name == "linear")
-    assert names[linear] == "h"
+    by_name = {n.name: n for n in all_nodes}
+    assert names[by_name["add"]] == "h"
+    # the bias-less matmul decompose() left behind is not anything the user wrote
+    assert by_name["linear"] not in names
 
 
 def test_placeholder_keeps_its_parameter_name(tmp_path):
@@ -122,12 +124,32 @@ def test_placeholder_keeps_its_parameter_name(tmp_path):
     assert names[x] == "x"
 
 
+FUNCTIONAL = """
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Net(nn.Module):
+    def forward(self, x):
+        h = x * 2.0
+        h = F.gelu(h)
+        return h * 0.5
+"""
+
+
 def test_call_expression_uses_user_names(tmp_path):
-    clusters, specs, all_nodes, src = build_pipeline(MODEL, (4, 32), tmp_path)
+    clusters, specs, all_nodes, src = build_pipeline(FUNCTIONAL, (4, 32), tmp_path)
     names = user_variable_names(all_nodes, src)
     expr = call_expression(emit(clusters[0], specs), clusters[0], names)
-    assert expr == "cluster0(h)"
-    assert "linear" not in expr
+    assert expr == "cluster0(x)"
+
+
+def test_decomposed_cluster_declines_a_diff(tmp_path):
+    """decompose() trades a diff for a cluster: its input is the bias-less matmul,
+    which the user never wrote and so cannot be named in a replacement line."""
+    clusters, specs, all_nodes, src = build_pipeline(MODEL, (4, 32), tmp_path)
+    names = user_variable_names(all_nodes, src)
+    assert [n.name for n in clusters[0].inputs] == ["linear", "fc_bias"]
+    assert call_expression(emit(clusters[0], specs), clusters[0], names) is None
 
 
 def test_call_expression_declines_unknown_name():

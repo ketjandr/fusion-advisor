@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 from torch.fx.proxy import TraceError
 
+from .decompose import decompose
+
 # Traced through, not treated as leaves. Must be fusion-relevant AND
 # control-flow-free (nn.MultiheadAttention is neither, it currently raises TraceError).
 TRANSPARENT_MODULES: tuple[type, ...] = (
@@ -47,4 +49,4 @@ def trace(model: nn.Module) -> torch.fx.GraphModule:
             f"in forward(). {e}"
         ) from e
 
-    return torch.fx.GraphModule(model, fx_graph)
+    return decompose(torch.fx.GraphModule(model, fx_graph))
