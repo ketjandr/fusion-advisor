@@ -46,5 +46,11 @@ def trace(model: nn.Module) -> torch.fx.GraphModule:
             f"Cannot trace {type(model).__name__}: data-dependent control flow "
             f"in forward(). {e}"
         ) from e
+    except Exception as e:  # forward() runs arbitrary user code
+        raise TracingError(
+            f"Cannot trace {type(model).__name__}: {type(e).__name__}: {e}. "
+            f"Shapes are symbolic while tracing, so indexing or reshaping with a "
+            f"value read from .shape fails here."
+        ) from e
 
     return torch.fx.GraphModule(model, fx_graph)

@@ -78,6 +78,19 @@ class SumReduction(nn.Module):
         return (x * 2.0).sum(-1)
 
 
+class ResidualReadTwice(nn.Module):
+    """A transformer residual: `h` feeds both the next norm and its own add."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.norm = nn.LayerNorm(d)
+        self.drop = nn.Dropout(0.1)
+
+    def forward(self, x):
+        h = x + 1.0  # stands in for the attention residual
+        return h + self.drop(self.norm(h))
+
+
 class UnlowerableOp(nn.Module):
     """Model containing a pointwise op with no supported lowering."""
 

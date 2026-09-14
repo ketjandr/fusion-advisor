@@ -38,6 +38,15 @@ def _first_failure(candidate: list[fx.Node], specs):
     )
 
 
+def _without_extra_escapes(component: list[fx.Node]) -> list[fx.Node] | None:
+    """Drop members that must be materialised anyway, keeping the cluster's result."""
+    escaping = escaping_nodes(component)
+    if len(escaping) < 2:
+        return None
+    result = escaping[-1]  # topologically last, so the value the cluster produces
+    return [n for n in component if n is result or n not in escaping]
+
+
 def _can_absorb(cat: OpCategory) -> bool:
     """True if this op category can join a cluster."""
     return cat in (OpCategory.POINTWISE_UNARY, OpCategory.POINTWISE_BINARY, OpCategory.REDUCTION)
@@ -91,6 +100,12 @@ def detect(gm, specs) -> tuple[list[FusableCluster], list[RejectedCandidate]]:
             continue
 
         reason = _first_failure(component, specs)
+        while reason is not None:  # retry on the part that can still fuse
+            smaller = _without_extra_escapes(component)
+            if smaller is None or len(smaller) < 2 or len(smaller) == len(component):
+                break
+            component, reason = smaller, _first_failure(smaller, specs)
+
         if reason is None:
             clusters.append(FusableCluster(
                 index=len(clusters),

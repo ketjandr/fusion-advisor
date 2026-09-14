@@ -33,11 +33,12 @@ def test_reconverging_diamond_is_one_cluster():
     assert "add" in node_names
 
 
-def test_opaque_consumer_blocks_fusion():
-    """TrueFanOut: matmul makes the cluster non-convex or fan-out."""
-    _, rejected = run(basic.TrueFanOut(), (4, 64))
-    reasons = [r.reason for r in rejected]
-    assert RejectionReason.FAN_OUT in reasons or RejectionReason.NON_CONVEX in reasons
+def test_opaque_consumer_is_excluded_not_fused():
+    """relu feeds a matmul so it stays materialised; the rest still fuses."""
+    clusters, _ = run(basic.TrueFanOut(), (4, 64))
+    fused = {n.name for c in clusters for n in c.nodes}
+    assert "relu" not in fused
+    assert fused == {"mul", "add"}
 
 
 def test_escaping_output_blocks_fusion():
@@ -51,10 +52,23 @@ def test_repeated_operand_is_legal():
     assert len(clusters) == 1
 
 
-def test_non_convex_cluster_rejected():
-    _, rejected = run(basic.TrueFanOut(), (4, 64))
-    reasons = [r.reason for r in rejected]
-    assert any(r in reasons for r in (RejectionReason.FAN_OUT, RejectionReason.NON_CONVEX))
+def test_non_convex_triple_is_never_formed():
+    """{relu, mul, add} would need the kernel to pause for a matmul."""
+    clusters, _ = run(basic.TrueFanOut(), (4, 64))
+    assert all({n.name for n in c.nodes} != {"relu", "mul", "add"} for c in clusters)
+
+
+def test_external_mutation_blocks_fusion():
+    """add_ mutates a value two members read, and fx does not order that."""
+    clusters, rejected = run(basic.MutationAfterRead(), (4, 64))
+    assert clusters == []
+    assert RejectionReason.ALIASING in [r.reason for r in rejected]
+
+
+def test_residual_is_dropped_so_the_rest_can_fuse():
+    """The transformer shape: a whole-component reject loses the only fusable pair."""
+    clusters, _ = run(basic.ResidualReadTwice(), (4, 16, 64))
+    assert [{n.name for n in c.nodes} for c in clusters] == [{"dropout", "add_1"}]
 
 
 def test_matmul_splits_into_two_clusters():

@@ -129,6 +129,11 @@ def check_reduction(cluster_nodes, specs) -> RejectionReason | None:
     return RejectionReason.REDUCTION_TOO_LARGE if spec.dims[-1] > MAX_REDUCTION_BLOCK else None
 
 
+def _mutates(node) -> bool:
+    """True for an in-place op, which fx records as an ordinary node."""
+    return node.op == "call_method" and isinstance(node.target, str) and node.target.endswith("_")
+
+
 def check_aliasing(cluster_nodes) -> RejectionReason | None:
     """Reject views and in-place mutation, no safe reordering guarantee."""
     for n in cluster_nodes:
@@ -139,4 +144,11 @@ def check_aliasing(cluster_nodes) -> RejectionReason | None:
                 return RejectionReason.ALIASING
         elif n.op == "call_function" and n.target in _VIEW_FNS:
             return RejectionReason.ALIASING
+
+        # a value the cluster touches must not be mutated anywhere in the graph:
+        # fx has no edge ordering a read before a later in-place write, so two
+        # members reading it would see one value where eager saw two
+        for value in (n, *n.args):
+            if isinstance(value, fx.Node) and any(_mutates(u) for u in value.users):
+                return RejectionReason.ALIASING
     return None
