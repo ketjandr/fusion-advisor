@@ -312,7 +312,7 @@ blocks, MLPs, tied LM head. It takes integer token IDs, so the input is `int64`:
 
 ```bash
 fusion-advisor --model examples/microgpt.py \
-    --input-shape 2,128 --dtype int64 --out-dir generated/microgpt
+    --input-shape 32,256 --dtype int64 --out-dir generated/microgpt
 ```
 
 ### Flags
