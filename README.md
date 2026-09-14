@@ -124,10 +124,22 @@ unchanged.
 
 ## Installing
 
-Fusion Advisor is not yet published to PyPI. Install it from a checkout:
+Install the analyzer alone for CPU-side tracing, analysis, and code generation:
 
 ```bash
-git clone <repo-url> fusion-advisor
+pip install fusion-advisor
+```
+
+Install the GPU extra to compile and benchmark the generated Triton kernels:
+
+```bash
+pip install 'fusion-advisor[gpu]'
+```
+
+For development, install it from a checkout:
+
+```bash
+git clone https://github.com/ketjandr/fusion-advisor.git
 cd fusion-advisor
 python -m venv .venv
 source .venv/bin/activate
@@ -156,7 +168,8 @@ pytest -m gpu -v -s       # kernel numerics + benchmarks, on a CUDA box
 ## Using it
 
 Point the CLI at a file that defines an `nn.Module` and give it an example input
-shape. The repo ships a showcase model in [`examples/example_net.py`](examples/example_net.py):
+shape. The repo ships a showcase model in
+[`examples/example_net.py`](https://github.com/ketjandr/fusion-advisor/blob/main/examples/example_net.py):
 
 ```python
 class ExampleNet(nn.Module):
@@ -194,15 +207,15 @@ Fusable clusters (estimated memory traffic)
 ┃ # ┃ category                  ┃ ops ┃   traffic ┃  traffic ┃ traffic ┃ map   ┃ lines  ┃
 ┃   ┃                           ┃     ┃ (unfused) ┃  (fused) ┃   saved ┃       ┃        ┃
 ┡━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━━┩
-│ 0 │ elementwise-chain         │ 3   │  384.0 MB │ 128.0 MB │     67% │ exact │ L15-17 │
-│ 1 │ elementwise-chain         │ 3   │  192.0 MB │  64.0 MB │     67% │ exact │ L21-23 │
-│ 2 │ single-reduction-boundary │ 3   │  192.0 MB │  64.0 MB │     67% │ exact │ L27-29 │
+│ 0 │ elementwise-chain         │ 3   │  384.0 MB │ 128.0 MB │     67% │ exact │ L19-21 │
+│ 1 │ elementwise-chain         │ 3   │  192.0 MB │  64.0 MB │     67% │ exact │ L25-27 │
+│ 2 │ single-reduction-boundary │ 3   │  192.0 MB │  64.0 MB │     67% │ exact │ L31-33 │
 └───┴───────────────────────────┴─────┴───────────┴──────────┴─────────┴───────┴────────┘
 Across 3 cluster(s): 512.0 MB of 768.0 MB cluster-local traffic avoided.
 Estimates are a DRAM upper bound with no cache model.
 ```
 
-Reading a row: cluster 0 is the `x*2 → relu → +1` chain on lines 15-17. Unfused
+Reading a row: cluster 0 is the `x*2 → relu → +1` chain on lines 19-21. Unfused
 it moves 384 MB (each op reads and writes a 64 MB tensor); fused it moves 128 MB
 (read the input once, write the result once). The `exact` map means a diff is
 available.
@@ -292,7 +305,8 @@ sibling module, after confirmation.
 
 ### A realistic model
 
-[`examples/microgpt.py`](examples/microgpt.py) is a complete decoder-only
+[`examples/microgpt.py`](https://github.com/ketjandr/fusion-advisor/blob/main/examples/microgpt.py)
+is a complete decoder-only
 transformer: token/position embeddings, causal multi-head attention, pre-norm
 blocks, MLPs, tied LM head. It takes integer token IDs, so the input is `int64`:
 
