@@ -85,6 +85,24 @@ def test_backward_stub_raises_rather_than_detaching(tmp_path):
         (fn(x) + x).sum().backward()
 
 
+def test_launch_floor_is_measured_and_small():
+    """The floor is a real per-machine number, not a tuned constant."""
+    from fusion_advisor.validate.bench import launch_floor_ms
+
+    floor = launch_floor_ms()
+    print(f"\n  launch floor: {floor * 1000:.1f}us")
+    assert 0.0 < floor < 1.0  # microseconds, not milliseconds
+
+
+def test_measurement_beats_the_byte_guess():
+    """A huge working set that ran at the floor is still launch-bound."""
+    from fusion_advisor.validate.bench import CacheRegime
+
+    huge = 512 << 20
+    assert CacheRegime.classify(huge) is CacheRegime.DRAM_BOUND
+    assert CacheRegime.classify(huge, median_ms=0.0) is CacheRegime.LAUNCH_BOUND
+
+
 def test_validate_end_to_end():
     """compile -> cluster numerics -> model numerics -> benchmark, on real hardware."""
     from fusion_advisor.validate.bench import validate

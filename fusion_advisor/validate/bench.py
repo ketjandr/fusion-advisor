@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import statistics
 import sys
@@ -21,20 +22,32 @@ KERNEL_HEADER = "import torch\nimport triton\nimport triton.language as tl\n\n"
 # pct_of_peak as a ceiling check rather than an exact efficiency figure.
 PEAK_GBPS = 272.0
 
-LAUNCH_BOUND_BYTES = 1 << 20  # below ~1 MB the launch dominates the transfer
+# Overhead is at most 1/N of a measurement N times the launch floor.
+LAUNCH_BOUND_MULTIPLE = 5
+
+# Only used when no measurement is available. A byte threshold cannot be general:
+# it is floor_time * bandwidth, so ~16 MB on a 4060 is ~234 MB on an H100.
+LAUNCH_BOUND_BYTES = 16 << 20
 DEFAULT_L2_BYTES = 24 << 20  # RTX 4060 fallback if the device will not say
 
 
 class CacheRegime(Enum):
     """Which effect a measurement is actually dominated by on this GPU."""
 
-    LAUNCH_BOUND = "launch-bound"  # <~1 MB: measuring kernel launch overhead
-    L2_RESIDENT = "l2-resident"  # <24 MB on a 4060: L2 absorbs the round-trip
-    DRAM_BOUND = "dram-bound"  # >24 MB: the regime traffic.py describes
+    LAUNCH_BOUND = "launch-bound"  # wall time is overhead, not data movement
+    L2_RESIDENT = "l2-resident"  # fits in L2, so the round-trip never reaches DRAM
+    DRAM_BOUND = "dram-bound"  # the regime traffic.py describes
 
     @staticmethod
-    def classify(working_set_bytes: int) -> CacheRegime:
-        if working_set_bytes < LAUNCH_BOUND_BYTES:
+    def classify(working_set_bytes: int, median_ms: float | None = None) -> CacheRegime:
+        """Pass `median_ms` when you have one - bytes alone cannot see the floor."""
+        floor = launch_floor_ms()
+        if median_ms is not None and floor > 0:
+            launch_bound = median_ms < LAUNCH_BOUND_MULTIPLE * floor
+        else:  # no GPU to measure on, fall back to the byte guess
+            launch_bound = working_set_bytes < LAUNCH_BOUND_BYTES
+
+        if launch_bound:
             return CacheRegime.LAUNCH_BOUND
         if working_set_bytes < l2_bytes():
             return CacheRegime.L2_RESIDENT
@@ -46,6 +59,19 @@ def l2_bytes() -> int:
     if not torch.cuda.is_available():
         return DEFAULT_L2_BYTES
     return getattr(torch.cuda.get_device_properties(0), "L2_cache_size", DEFAULT_L2_BYTES)
+
+
+@functools.cache
+def launch_floor_ms() -> float:
+    """Wall time of the smallest possible launch on this machine.
+
+    Measured rather than tuned: the floor is a host property (Python dispatch,
+    driver latency) that varies with CPU and driver, not just with the GPU.
+    """
+    if not torch.cuda.is_available():
+        return 0.0
+    x = torch.ones(1, device="cuda")
+    return time_fn(torch.relu, (x,), 0, warmup=10, iters=50).median_ms
 
 
 @dataclass
@@ -203,16 +229,18 @@ def validate(kernel, cluster, gm, specs, *, atol=1e-4, rtol=1e-4) -> ValidationR
         return ValidationResult(True, True, False, max_err, None, "model numerics mismatch")
 
     nbytes = working_set_bytes(cluster, specs)
+    cluster_fused = time_fn(fused, args, nbytes)
     return ValidationResult(
         compiled=True,
         numerics_ok=True,
         model_numerics_ok=True,
         max_abs_err=max_err,
         benchmark=BenchmarkResult(
-            regime=CacheRegime.classify(nbytes),
+            # classify from the measurement, not the byte count
+            regime=CacheRegime.classify(nbytes, cluster_fused.median_ms),
             working_set_bytes=nbytes,
             cluster_eager=time_fn(reference, args, nbytes),
-            cluster_fused=time_fn(fused, args, nbytes),
+            cluster_fused=cluster_fused,
             model_eager=time_fn(gm, model_inputs, nbytes),
             model_patched=time_fn(patched, model_inputs, nbytes),
         ),

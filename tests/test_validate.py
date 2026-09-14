@@ -123,7 +123,8 @@ def test_working_set_is_inputs_plus_outputs():
     ("nbytes", "expected"),
     [
         (16 * 1024, CacheRegime.LAUNCH_BOUND),
-        (8 << 20, CacheRegime.L2_RESIDENT),
+        (8 << 20, CacheRegime.LAUNCH_BOUND),
+        (20 << 20, CacheRegime.L2_RESIDENT),
         (512 << 20, CacheRegime.DRAM_BOUND),
     ],
 )
@@ -136,6 +137,14 @@ def test_default_test_shapes_are_launch_bound():
     _, clusters, specs, _ = pipeline(basic.ElementwiseChain(), (4, 64))
     nbytes = working_set_bytes(clusters[0], specs)
     assert CacheRegime.classify(nbytes) is CacheRegime.LAUNCH_BOUND
+
+
+def test_falls_back_to_bytes_with_no_floor_to_measure():
+    """Off-GPU there is no floor, so a timing must not silently disable the check."""
+    if gpu_available():
+        pytest.skip("this asserts the no-GPU fallback")
+    assert CacheRegime.classify(8 << 20, median_ms=999.0) is CacheRegime.LAUNCH_BOUND
+    assert CacheRegime.classify(512 << 20, median_ms=0.0) is CacheRegime.DRAM_BOUND
 
 
 # --- result arithmetic ---
