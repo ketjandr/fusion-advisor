@@ -88,6 +88,20 @@ REDUCTION_METHOD_RULES: dict[str, callable] = {
 }
 
 
+# what a masked-off lane must become so it cannot change the result
+_IDENTITY = {
+    "sum": "0.0", "mean": "0.0",
+    "amax": "-float('inf')", "softmax": "-float('inf')", "log_softmax": "-float('inf')",
+    "amin": "float('inf')",
+}
+
+
+def reduction_identity(node) -> str:
+    """Value for masked lanes; 0.0 would add exp(0-max) to a softmax sum."""
+    name = node.target if isinstance(node.target, str) else getattr(node.target, "__name__", "")
+    return _IDENTITY.get(name, "0.0")
+
+
 def has_lowering(node) -> bool:
     """True if we can emit Triton for this node."""
     if node.op == "call_function":

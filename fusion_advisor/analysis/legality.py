@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 import torch.fx as fx
 
+from ..ir.op_registry import OpCategory, classify, reduction_axis
 from ..ir.shapes import Dim
 from .cluster import RejectionReason
 
@@ -83,7 +84,11 @@ def _broadcast(a: tuple[Dim, ...], b: tuple[Dim, ...]) -> tuple[Dim, ...] | None
 
 def check_shapes(cluster_nodes, specs) -> RejectionReason | None:
     """Reject unless all members are provably broadcast-compatible."""
-    shapes = [specs[n.name].shape for n in cluster_nodes if n.name in specs]
+    shapes = [
+        specs[n.name].shape
+        for n in cluster_nodes
+        if n.name in specs and classify(n) is not OpCategory.REDUCTION  # reduction is exempt
+    ]
     if len(shapes) < 2:
         return None
     out = shapes[0]
@@ -92,6 +97,30 @@ def check_shapes(cluster_nodes, specs) -> RejectionReason | None:
         if out is None:
             return RejectionReason.SHAPE_MISMATCH
     return None
+
+
+MAX_REDUCTION_BLOCK = 16384  # unmeasured guess; compile_kernel is the real gate
+
+
+def check_reduction(cluster_nodes, specs) -> RejectionReason | None:
+    """Reject what the row-per-program skeleton cannot express."""
+    reductions = [n for n in cluster_nodes if classify(n) is OpCategory.REDUCTION]
+    if not reductions:
+        return None
+    if len(reductions) > 1:  # mean+var in one pass needs Welford, v2
+        return RejectionReason.UNSUPPORTED_REDUCTION
+
+    node = reductions[0]
+    operand = node.args[0] if node.args else None
+    spec = specs.get(operand.name) if isinstance(operand, fx.Node) else None
+    if spec is None:
+        return RejectionReason.UNSUPPORTED_REDUCTION
+
+    axis = reduction_axis(node, len(spec.shape))
+    if axis is None or axis != len(spec.shape) - 1:
+        return RejectionReason.UNSUPPORTED_REDUCTION
+
+    return RejectionReason.REDUCTION_TOO_LARGE if spec.dims[-1] > MAX_REDUCTION_BLOCK else None
 
 
 def check_aliasing(cluster_nodes) -> RejectionReason | None:

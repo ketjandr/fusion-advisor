@@ -1,7 +1,17 @@
 """Tests for analysis/legality.py - pure graph topology, no shapes needed."""
 
+import torch
+
 from fusion_advisor.analysis.cluster import RejectionReason
-from fusion_advisor.analysis.legality import check_convexity, check_fan_out, escaping_nodes
+from fusion_advisor.analysis.detect_clusters import detect
+from fusion_advisor.analysis.legality import (
+    MAX_REDUCTION_BLOCK,
+    check_convexity,
+    check_fan_out,
+    check_reduction,
+    escaping_nodes,
+)
+from fusion_advisor.ir.shapes import propagate
 from fusion_advisor.ir.trace import trace
 from tests.fixtures import basic
 
@@ -79,6 +89,59 @@ def test_split_clusters_around_matmul_are_convex():
     after = cluster(basic.OpaqueBarrier(), "add", "gelu")
     assert check_convexity(before) is None
     assert check_convexity(after) is None
+
+
+# --- reductions: the row-per-program skeleton only expresses some of them ---
+
+
+class Softmax(torch.nn.Module):
+    def __init__(self, dim=-1):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, x):
+        return torch.nn.functional.softmax(x * 0.5, dim=self.dim)
+
+
+class TwoReductions(torch.nn.Module):
+    def forward(self, x):
+        h = x * 0.5
+        return h.sum(-1, keepdim=True) + h.mean(-1, keepdim=True)
+
+
+def reasons(model, shape):
+    gm = trace(model)
+    specs = propagate(gm, torch.randn(*shape))
+    clusters, rejected = detect(gm, specs)
+    return clusters, [r.reason for r in rejected]
+
+
+def test_reduction_within_one_block_is_legal():
+    clusters, _ = reasons(Softmax(), (2, MAX_REDUCTION_BLOCK))
+    assert len(clusters) == 1
+
+
+def test_reduction_wider_than_a_block_is_rejected():
+    """The mask would silently reduce only the first block."""
+    _, rej = reasons(Softmax(), (2, MAX_REDUCTION_BLOCK * 2))
+    assert RejectionReason.REDUCTION_TOO_LARGE in rej
+
+
+def test_reduction_over_a_non_last_axis_is_rejected():
+    """One row per program, so only the trailing axis reduces."""
+    _, rej = reasons(Softmax(dim=0), (8, 16))
+    assert RejectionReason.UNSUPPORTED_REDUCTION in rej
+
+
+def test_two_reductions_in_one_cluster_is_rejected():
+    """mean+var in one pass needs Welford, v2."""
+    _, rej = reasons(TwoReductions(), (8, 16))
+    assert RejectionReason.UNSUPPORTED_REDUCTION in rej
+
+
+def test_pointwise_clusters_are_unaffected():
+    c = cluster(basic.ElementwiseChain(), "mul", "relu", "add")
+    assert check_reduction(c, {}) is None
 
 
 def test_single_node_cluster_is_trivially_convex():

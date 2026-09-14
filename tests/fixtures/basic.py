@@ -71,6 +71,13 @@ class ReductionBoundary(nn.Module):
         return F.softmax(x, dim=-1)
 
 
+class SumReduction(nn.Module):
+    """Reduction that collapses the row, so the store is one scalar per program."""
+
+    def forward(self, x):
+        return (x * 2.0).sum(-1)
+
+
 class OpaqueBarrier(nn.Module):
     """matmul between two chains - must yield TWO clusters."""
 

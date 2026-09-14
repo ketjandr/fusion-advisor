@@ -159,20 +159,42 @@ def test_broadcast_bias_matches_eager(tmp_path):
 
 
 def test_broadcast_is_not_accidentally_elementwise(tmp_path):
-    """A wrong index still returns the right shape, so check the values."""
+    """A wrong index still gives the right shape, so check values."""
     model = basic.BroadcastBias().cuda()
     model.bias.data = torch.arange(64, device="cuda").float()  # distinct per column
     fn, args, reference = build(model, (4, 16, 64), tmp_path=tmp_path)
     torch.testing.assert_close(fn(*args), reference(*args))
 
 
-@pytest.mark.xfail(reason="reduction skeleton body not wired up", strict=False)
-def test_reduction_matches_eager(tmp_path):
+@pytest.mark.parametrize("cols", [16, 100, 1000], ids=["pow2", "ragged", "wide"])
+def test_reduction_matches_eager(tmp_path, cols):
+    """Ragged widths leave block lanes that must not join the sum."""
     model = basic.ReductionBoundary().cuda()
     gm = trace(model)
-    x = torch.randn(4, 16, device="cuda")
-    mask = torch.randint(0, 2, (4, 16), device="cuda").bool()
+    x = torch.randn(8, cols, device="cuda")
+    mask = torch.randint(0, 2, (8, cols), device="cuda").bool()
     specs = propagate(gm, x, mask)
     clusters, _ = detect(gm, specs)
     fn = load_kernel(emit(clusters[0], specs), tmp_path)
     torch.testing.assert_close(fn(x, mask), model(x, mask))
+
+
+@pytest.mark.parametrize("cols", [64, 100], ids=["pow2", "ragged"])
+def test_collapsing_reduction_matches_eager(tmp_path, cols):
+    """sum(-1) returns one value per row."""
+    model = basic.SumReduction().cuda()
+    fn, args, reference = build(model, (8, cols), tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*args), reference(*args))
+
+
+def test_every_row_is_reduced_separately(tmp_path):
+    """A missing row offset makes every row a copy of row 0."""
+    model = basic.ReductionBoundary().cuda()
+    gm = trace(model)
+    x = torch.randn(8, 32, device="cuda") * 10  # spread out, so rows really differ
+    mask = torch.zeros(8, 32, dtype=torch.bool, device="cuda")
+    specs = propagate(gm, x, mask)
+    clusters, _ = detect(gm, specs)
+    out = load_kernel(emit(clusters[0], specs), tmp_path)(x, mask)
+    torch.testing.assert_close(out, model(x, mask))
+    assert not torch.allclose(out[0], out[1])

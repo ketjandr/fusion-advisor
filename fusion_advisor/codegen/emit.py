@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch.fx as fx
 
-from fusion_advisor.ir.op_registry import OpCategory, classify, reduction_axis
+from fusion_advisor.ir.op_registry import OpCategory, classify
 
 from ..analysis.cluster import ClusterCategory, FusableCluster
-from .lowering import lower
+from .lowering import lower, reduction_identity
 from .skeleton import ELEMENTWISE_SKELETON, REDUCTION_SKELETON
 
 
@@ -35,10 +36,10 @@ def _indent(lines: list[str], spaces: int = 4) -> str:
     return "\n".join(pad + ln for ln in lines)
 
 
-def broadcast_index(in_dims: tuple[int, ...], out_dims: tuple[int, ...]) -> str:
-    """Flat index into an operand, given the flat output index `offs`."""
+def broadcast_index(in_dims: tuple[int, ...], out_dims: tuple[int, ...], flat: str = "offs") -> str:
+    """Flat index into an operand, given `flat` as the index into out_dims."""
     if tuple(in_dims) == tuple(out_dims):
-        return "offs"
+        return flat
 
     pad = len(out_dims) - len(in_dims)  # right-align, numpy style
     terms, out_div, in_stride = [], 1, 1
@@ -46,13 +47,13 @@ def broadcast_index(in_dims: tuple[int, ...], out_dims: tuple[int, ...]) -> str:
         j = i - pad
         size = in_dims[j] if j >= 0 else 1
         if size != 1:  # a size-1 or absent dim contributes nothing
-            coord = "offs" if out_div == 1 else f"offs // {out_div}"
+            coord = flat if out_div == 1 else f"{flat} // {out_div}"
             coord = f"({coord}) % {out_dims[i]}"
             terms.append(coord if in_stride == 1 else f"({coord}) * {in_stride}")
             in_stride *= size
         out_div *= out_dims[i]
 
-    return " + ".join(reversed(terms)) or "offs * 0"  # all broadcast, still a block
+    return " + ".join(reversed(terms)) or f"{flat} * 0"  # all broadcast, still a block
 
 
 def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
@@ -65,7 +66,14 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
     node_to_var: dict[fx.Node, str] = {}
     var_count = 0
 
-    out_dims = specs[escaping[0].name].dims
+    reducing = cluster.category is ClusterCategory.REDUCTION_BOUNDARY
+    reduction = next((n for n in nodes if classify(n) is OpCategory.REDUCTION), None)
+
+    # a reduction block is one row; elementwise spans the whole tensor
+    if reducing:
+        flat, block_dims = "base", specs[reduction.args[0].name].dims
+    else:
+        flat, block_dims = "offs", specs[escaping[0].name].dims
 
     # tl.load lines, one per external input
     load_lines: list[str] = []
@@ -75,7 +83,7 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
         var = f"v{var_count}"
         in_ptrs.append(ptr)
         node_to_var[inp] = var
-        index = broadcast_index(specs[inp.name].dims, out_dims)
+        index = broadcast_index(specs[inp.name].dims, block_dims, flat)
         load_lines.append(f"{var} = tl.load({ptr} + ({index}), mask=mask)")
         var_count += 1
 
@@ -86,16 +94,16 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
 
         # we want to extract dim separately for operands for reduction nodes
         if classify(node) == OpCategory.REDUCTION:
-            # only the tensor input is an operand
-            operand_exprs.append(_resolve_arg(node.args[0], node_to_var))
+            # neutralise tail lanes here; `other=-inf` breaks a bool load
+            guard = f"v{var_count}"
+            operand = _resolve_arg(node.args[0], node_to_var)
+            compute_lines.append(
+                f"{guard} = tl.where(mask, {operand}, {reduction_identity(node)})"
+            )
+            var_count += 1
 
-            # extract dim/axis separately
-            spec = specs.get(node.args[0].name) if isinstance(node.args[0], fx.Node) else None
-            ndim = len(spec.shape) if spec else None
-            axis = reduction_axis(node, ndim)
-            assert axis is not None  # legality pass should've proved that axis is accepted
-
-            expr = lower(node, operand_exprs, str(axis))
+            # one pid = one 1D row, so reduce along local axis 0
+            expr = lower(node, [guard], "0")
         else:  # normal case
             operand_exprs = [_resolve_arg(arg, node_to_var) for arg in node.args]
             expr = lower(node, operand_exprs)
@@ -106,12 +114,18 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
         node_to_var[node] = var  # add this so downstream nodes can use the expr node
 
     # tl.store lines (one per escaping node)
+    out_dims = specs[escaping[0].name].dims
+    collapsed = reducing and out_dims != block_dims  # e.g. sum(-1): one value per row
     store_lines: list[str] = []
     out_ptrs: list[str] = []
     for i, esc in enumerate(escaping):
         ptr = f"out_ptr{i}"
         out_ptrs.append(ptr)
-        store_lines.append(f"tl.store({ptr} + offs, {node_to_var[esc]}, mask=mask)")
+        store_lines.append(
+            f"tl.store({ptr} + row, {node_to_var[esc]})"
+            if collapsed
+            else f"tl.store({ptr} + ({flat}), {node_to_var[esc]}, mask=mask)"
+        )
 
     # assemble kernel
     params = ", ".join(in_ptrs + out_ptrs)
@@ -122,15 +136,33 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
     # assemble wrapper
     in_args = [f"in{i}" for i in range(len(in_ptrs))]
     args = ", ".join(in_args)
-    like = in_args[next((i for i, n in enumerate(inputs) if specs[n.name].dims == out_dims), 0)]
+    # not in0 blindly, it may be the [D] bias
+    like = in_args[next((i for i, n in enumerate(inputs) if specs[n.name].dims == block_dims), 0)]
+
+    if reducing:
+        n_cols = block_dims[-1]
+        n_rows = math.prod(block_dims) // n_cols
+        block = 1 << (n_cols - 1).bit_length()  # tl.arange needs a power of two
+        alloc = (
+            f"torch.empty({out_dims}, dtype={like}.dtype, device={like}.device)"
+            if collapsed
+            else f"torch.empty_like({like})"
+        )
+        call = f"{name}_kernel[({n_rows},)]({args}, out0, {n_rows}, {n_cols}, BLOCK_SIZE={block})"
+        launch = [f"        out0 = {alloc}", f"        {call}"]
+    else:
+        launch = [
+            f"        out0 = torch.empty_like({like})",
+            f"        n = {like}.numel()",
+            "        grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)",
+            f"        {name}_kernel[grid]({args}, out0, n, BLOCK_SIZE=1024)",
+        ]
+
     wrapper_lines = [
         f"class _{name}(torch.autograd.Function):",
         "    @staticmethod",
         f"    def forward(ctx, {args}):",
-        f"        out0 = torch.empty_like({like})",
-        f"        n = {like}.numel()",
-        "        grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)",
-        f"        {name}_kernel[grid]({args}, out0, n, BLOCK_SIZE=1024)",
+        *launch,
         f"        ctx.save_for_backward({args})  # what a backward kernel will need",
         "        return out0",
         "",
@@ -145,7 +177,7 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
     ]
     wrapper_src = "\n".join(wrapper_lines)
 
-    # diff-facing, so use fx node names (a placeholder's name is the user's variable)
+    # diff-facing, so use fx names (a placeholder's name is the user's variable)
     call_expr = f"{name}({', '.join(n.name for n in inputs)})"
 
     return GeneratedKernel(

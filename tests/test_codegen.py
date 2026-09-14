@@ -95,6 +95,82 @@ def test_reduction_uses_reduction_skeleton():
     assert "n_cols" in kernel.kernel_source
 
 
+def reduction_kernel(cols=16):
+    gm = trace(basic.ReductionBoundary())
+    specs = propagate(gm, torch.randn(4, cols), torch.randint(0, 2, (4, cols)).bool())
+    clusters, _ = detect(gm, specs)
+    return emit(clusters[0], specs)
+
+
+def test_reduction_load_offsets_by_row():
+    """Without `base` every program reads row 0."""
+    src = reduction_kernel().kernel_source
+    assert "base = row * n_cols + offs" in src
+    assert "tl.load(in_ptr0 + (base)" in src
+
+
+def test_reduction_uses_block_axis_not_tensor_axis():
+    """Axis 1 of the tensor is axis 0 of a one-row block."""
+    src = reduction_kernel().kernel_source
+    assert "dim=0)" in src
+    assert "dim=1)" not in src
+
+
+def test_tail_lanes_are_neutralised_before_reducing():
+    """Leftover lanes would add exp(0 - max) to the softmax sum."""
+    src = reduction_kernel().kernel_source
+    guard = next(ln for ln in src.splitlines() if "tl.where(mask," in ln)
+    assert "-float('inf')" in guard
+    assert src.index(guard) < src.index("tl.softmax")
+
+
+def test_boolean_operand_is_not_loaded_with_inf():
+    """-inf does not fit in an int1."""
+    src = reduction_kernel().kernel_source
+    assert "other=" not in src
+
+
+def test_reduction_grid_is_one_program_per_row():
+    wrapper = reduction_kernel(cols=16).wrapper_source
+    assert "[(4,)]" in wrapper
+    assert "4, 16, BLOCK_SIZE=16" in wrapper
+
+
+def test_block_size_is_rounded_up_to_a_power_of_two():
+    """tl.arange needs a power of two."""
+    assert "BLOCK_SIZE=128" in reduction_kernel(cols=100).wrapper_source
+
+
+def collapsing_kernel(cols=100):
+    gm = trace(basic.SumReduction())
+    specs = propagate(gm, torch.randn(8, cols))
+    clusters, _ = detect(gm, specs)
+    return emit(clusters[0], specs)
+
+
+def test_collapsing_reduction_stores_one_scalar_per_row():
+    """sum(-1) stores a value at `row`, not a block."""
+    src = collapsing_kernel().kernel_source
+    assert "tl.store(out_ptr0 + row," in src
+    assert "mask=mask)" not in src.splitlines()[-2]
+
+
+def test_collapsing_reduction_allocates_the_reduced_shape():
+    """empty_like would give the pre-reduction shape."""
+    assert "torch.empty((8,)" in collapsing_kernel().wrapper_source
+
+
+def test_sum_neutralises_tail_lanes_with_zero():
+    """-inf would poison a sum."""
+    assert "tl.where(mask, v1, 0.0)" in collapsing_kernel().kernel_source
+
+
+def test_reduction_kernel_is_valid_python():
+    k = reduction_kernel()
+    ast.parse(k.kernel_source)
+    ast.parse(k.wrapper_source)
+
+
 def test_has_lowering_matches_registry():
     """Every op in UNARY_FNS/BINARY_FNS should have a lowering rule."""
     from types import SimpleNamespace
@@ -159,7 +235,7 @@ BROADCASTS = [
 
 @pytest.mark.parametrize(("in_dims", "out_dims"), BROADCASTS, ids=str)
 def test_broadcast_index_matches_torch(in_dims, out_dims):
-    """Evaluate the emitted index and compare against torch's own broadcast."""
+    """Compare the emitted index against torch's own broadcast."""
     expr = broadcast_index(in_dims, out_dims)
     x = torch.arange(math.prod(in_dims)).reshape(in_dims)
     offs = torch.arange(math.prod(out_dims))
@@ -172,7 +248,7 @@ def test_same_shape_needs_no_index_math():
 
 
 def test_fully_broadcast_operand_stays_a_block():
-    """`0` would load a scalar where the rest of the kernel expects a vector."""
+    """`0` would load a scalar, not a block."""
     assert broadcast_index((1,), (4, 64)) == "offs * 0"
 
 
@@ -184,7 +260,7 @@ def test_broadcast_kernel_indexes_the_bias_separately():
 
 
 def test_wrapper_sizes_output_from_the_right_input():
-    """empty_like(in0) is wrong when in0 is the bias rather than the activation."""
+    """in0 may be the bias, not the activation."""
     cluster, specs = first_cluster(basic.BroadcastBias(), (4, 16, 64))
     kernel = emit(cluster, specs)
     fn = load_wrapper(kernel)

@@ -22,5 +22,6 @@ def {name}_kernel({params}, n_rows, n_cols, BLOCK_SIZE: tl.constexpr):
     row = tl.program_id(0)
     offs = tl.arange(0, BLOCK_SIZE)
     mask = offs < n_cols
+    base = row * n_cols + offs
 {body}
 """
