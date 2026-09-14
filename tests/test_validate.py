@@ -212,8 +212,8 @@ def test_dram_bound_result_prints_the_speedup(capsys):
 
     render_validation(SimpleNamespace(index=0), fake_result(CacheRegime.DRAM_BOUND))
     out = capsys.readouterr().out
-    assert "cluster speedup 2.00x" in out
-    assert "end-to-end model speedup 2.00x" in out
+    assert "fused cluster speedup 2.00x" in out
+    assert "model speedup 2.00x" in out
     assert "peak memory bandwidth" in out
 
 

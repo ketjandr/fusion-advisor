@@ -49,14 +49,14 @@ def render_clusters(clusters, estimates, ranges=None) -> None:
         header_style="",
     )
     columns = (
-        ("#", "left"),
-        ("category", "left"),
-        ("ops", "left"),
+        ("#\n", "left"),
+        ("category\n", "left"),
+        ("ops\n", "left"),
         ("traffic\n(unfused)", "right"),
         ("traffic\n(fused)", "right"),
         ("traffic\nsaved", "right"),
-        ("map", "left"),
-        ("lines", "left"),
+        ("map\n", "left"),
+        ("lines\n", "left"),
     )
     for name, justify in columns:
         table.add_column(name, justify=justify)
@@ -139,9 +139,9 @@ def render_validation(cluster, result) -> None:
 
     console.print(
         f"  {b.regime.value}  {human_bytes(b.working_set_bytes)}  "
-        f"cluster speedup [bold]{b.cluster_speedup:.2f}x[/bold]  "
-        f"end-to-end model speedup [bold]{b.model_speedup:.2f}x[/bold]  "
-        f"fused-kernel bandwidth {b.cluster_fused.achieved_gbps:.0f} GB/s "
+        f"fused cluster speedup [bold]{b.cluster_speedup:.2f}x[/bold]  "
+        f"model speedup [bold]{b.model_speedup:.2f}x[/bold]  "
+        f"fused cluster bandwidth {b.cluster_fused.achieved_gbps:.0f} GB/s "
         f"({b.cluster_fused.pct_of_peak:.0f}% of {PEAK_GBPS:.0f} GB/s peak memory bandwidth)"
     )
     if b.cluster_inductor is not None:
