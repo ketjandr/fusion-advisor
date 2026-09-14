@@ -237,8 +237,19 @@ def test_apply_without_clusters_changes_nothing(runner, tmp_path):
     assert Path(path).read_text() == original
 
 
-def test_vs_inductor_says_it_needs_a_gpu(runner, tmp_path):
+def test_says_why_it_did_not_measure(runner, tmp_path):
+    """Without a GPU the run must say so, not silently omit the benchmark."""
+    from fusion_advisor.validate.bench import gpu_available
+
+    if gpu_available():
+        pytest.skip("this asserts the no-GPU path")
+    r = run(runner, tmp_path, MODEL, "--input-shape", "4,64", "--yes", "--out-dir", str(tmp_path))
+    assert "Not measured" in r.output
+
+
+def test_vs_inductor_is_still_a_stub(runner, tmp_path):
+    """The flag parses but does nothing yet; it must say so rather than stay silent."""
     r = run(runner, tmp_path, MODEL, "--input-shape", "4,64", "--yes",
             "--out-dir", str(tmp_path), "--vs-inductor")
     assert r.exit_code == 0, r.output
-    assert "GPU" in r.output
+    assert "not implemented" in r.output

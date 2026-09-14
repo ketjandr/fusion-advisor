@@ -1,3 +1,6 @@
+import json
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -175,6 +178,61 @@ def test_usable_requires_compiled_and_verified():
     assert not ValidationResult(True, False, None, None, None).usable
     assert not ValidationResult(True, True, False, None, None).usable
     assert ValidationResult(True, True, True, 0.0, None).usable
+
+
+# --- reporting: the regime must gate what gets shown ---
+
+
+def fake_result(regime, *, usable=True, eager=2.0, fused=1.0):
+    from fusion_advisor.validate.bench import BenchmarkResult
+
+    bench = BenchmarkResult(
+        regime=regime,
+        working_set_bytes=1 << 20,
+        cluster_eager=timing(eager),
+        cluster_fused=timing(fused),
+        model_eager=timing(eager),
+        model_patched=timing(fused),
+    )
+    return ValidationResult(True, usable, usable, 1e-6, bench)
+
+
+def test_launch_bound_result_never_prints_a_speedup(capsys):
+    """The ratio here is overhead noise; showing it as `2.00x` would mislead."""
+    from fusion_advisor.report.console import render_validation
+
+    render_validation(SimpleNamespace(index=0), fake_result(CacheRegime.LAUNCH_BOUND))
+    out = capsys.readouterr().out
+    assert "2.00x" not in out
+    assert "too small to measure" in out
+
+
+def test_dram_bound_result_prints_the_speedup(capsys):
+    from fusion_advisor.report.console import render_validation
+
+    render_validation(SimpleNamespace(index=0), fake_result(CacheRegime.DRAM_BOUND))
+    assert "2.00x" in capsys.readouterr().out
+
+
+def test_failed_numerics_is_reported_loudly(capsys):
+    from fusion_advisor.report.console import render_validation
+
+    render_validation(SimpleNamespace(index=0), fake_result(CacheRegime.DRAM_BOUND, usable=False))
+    out = capsys.readouterr().out
+    assert "NUMERICS FAILED" in out
+    assert "2.00x" not in out  # never quote a speedup for a wrong kernel
+
+
+def test_validation_payload_is_json_serializable():
+    """ValidationResult is a dataclass; json.dumps would choke on it raw."""
+    from fusion_advisor.report.json_out import _validation_payload
+
+    payload = _validation_payload(fake_result(CacheRegime.DRAM_BOUND))
+    json.dumps(payload)  # must not raise
+    assert payload["benchmark"]["regime"] == "dram-bound"
+    assert payload["benchmark"]["cluster_speedup"] == 2.0
+    assert payload["usable"] is True
+    assert _validation_payload(None) is None
 
 
 def test_validate_degrades_without_a_gpu():

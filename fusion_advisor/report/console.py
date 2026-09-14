@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ..sourcemap.provenance import MappingQuality
+from ..validate.bench import CacheRegime
 
 console = Console()
 
@@ -94,6 +95,40 @@ def render_diff(cluster_diff) -> None:
         console.print(f"[red]- {line}[/red]")
     for line in d.added:
         console.print(f"[green]+ {line}[/green]")
+
+
+def render_validation(cluster, result) -> None:
+    """Measured numerics and speedup for one cluster, or why there are none."""
+    if result.skipped_reason:
+        console.print(f"cluster {cluster.index}: not measured - {result.skipped_reason}", style="dim")
+        return
+    if not result.usable:
+        console.print(
+            f"cluster {cluster.index}: NUMERICS FAILED (max abs err {result.max_abs_err:.2e}) "
+            f"- do not use this kernel",
+            style="bold red",
+        )
+        return
+
+    b = result.benchmark
+    console.print(
+        f"cluster {cluster.index}: verified (max abs err {result.max_abs_err:.2e})", style="green"
+    )
+    if b.regime is CacheRegime.LAUNCH_BOUND:
+        # a ratio here is overhead noise; printing it as a speedup would mislead
+        console.print(
+            f"  {b.regime.value} at {human_bytes(b.working_set_bytes)} - too small to measure "
+            f"fusion. Re-run with a larger --input-shape.",
+            style="yellow",
+        )
+        return
+
+    console.print(
+        f"  {b.regime.value}  {human_bytes(b.working_set_bytes)}  "
+        f"cluster [bold]{b.cluster_speedup:.2f}x[/bold]  "
+        f"model [bold]{b.model_speedup:.2f}x[/bold]  "
+        f"({b.cluster_fused.achieved_gbps:.0f} GB/s, {b.cluster_fused.pct_of_peak:.0f}% of peak)"
+    )
 
 
 def render_unmapped(cluster, rng) -> None:

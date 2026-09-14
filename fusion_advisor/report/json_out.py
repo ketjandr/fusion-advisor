@@ -17,6 +17,32 @@ def _diff_payload(diff) -> dict | None:
     }
 
 
+def _validation_payload(v) -> dict | None:
+    """Flatten ValidationResult; None until a GPU run fills it in."""
+    if v is None:
+        return None
+    b = v.benchmark
+    return {
+        "compiled": v.compiled,
+        "numerics_ok": v.numerics_ok,
+        "model_numerics_ok": v.model_numerics_ok,
+        "usable": v.usable,
+        "max_abs_err": v.max_abs_err,
+        "skipped_reason": v.skipped_reason,
+        "benchmark": None
+        if b is None
+        else {
+            # regime qualifies the speedup; launch-bound numbers are not bandwidth
+            "regime": b.regime.value,
+            "working_set_bytes": b.working_set_bytes,
+            "cluster_speedup": round(b.cluster_speedup, 4),
+            "model_speedup": None if b.model_speedup is None else round(b.model_speedup, 4),
+            "achieved_gbps": round(b.cluster_fused.achieved_gbps, 1),
+            "pct_of_peak": round(b.cluster_fused.pct_of_peak, 1),
+        },
+    }
+
+
 def _cluster_payload(cluster, est, rng, diff, validation) -> dict:
     return {
         "index": cluster.index,
@@ -37,7 +63,7 @@ def _cluster_payload(cluster, est, rng, diff, validation) -> dict:
             "end_line": rng.end_line,
         },
         "diff": _diff_payload(diff),
-        "validation": validation,  # None until a GPU run fills it in
+        "validation": _validation_payload(validation),
     }
 
 
