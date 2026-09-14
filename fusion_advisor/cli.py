@@ -81,7 +81,7 @@ def _measure(clusters, kernels, gm, specs, vs_inductor: bool) -> list:
     return results
 
 
-def _apply_edits(loaded, kernels, diffs, assume_yes: bool) -> None:
+def _apply_edits(loaded, kernels, diffs) -> None:
     """Write one importable kernel module next to the model, then rewrite the model."""
     usable = [(k, d) for k, d in zip(kernels, diffs, strict=True) if k and d]
     if not usable:
@@ -94,7 +94,7 @@ def _apply_edits(loaded, kernels, diffs, assume_yes: bool) -> None:
         "until backward codegen lands.",
         style="yellow",
     )
-    if not assume_yes and not click.confirm(
+    if not click.confirm(
         f"Rewrite {model_path.name} in place ({len(usable)} edit(s))?", default=False
     ):
         return
@@ -127,7 +127,6 @@ def _apply_edits(loaded, kernels, diffs, assume_yes: bool) -> None:
 @click.option("--dtype", default="float32")
 @click.option("--json", "json_out", default=None, help="Write machine-readable results here.")
 @click.option("--explain-rejections", is_flag=True, help="Show why candidates were not fused.")
-@click.option("--yes", is_flag=True, help="Generate kernels without prompting.")
 @click.option(
     "--vs-inductor",
     is_flag=True,
@@ -138,10 +137,13 @@ def _apply_edits(loaded, kernels, diffs, assume_yes: bool) -> None:
     "--apply",
     "apply_edits",
     is_flag=True,
-    help=f"Apply the diffs to the model file. Writes a sibling {KERNEL_MODULE}.py.",
+    help=(
+        f"Apply the diffs to the model file after confirmation. "
+        f"Writes a sibling {KERNEL_MODULE}.py."
+    ),
 )
 def main(
-    model, model_class, input_shape, dtype, json_out, explain_rejections, yes, vs_inductor,
+    model, model_class, input_shape, dtype, json_out, explain_rejections, vs_inductor,
     out_dir, apply_edits,
 ):
     """Fusion Advisor: static fusion analysis for PyTorch models."""
@@ -171,7 +173,7 @@ def main(
     var_names = user_variable_names(all_nodes, loaded.source_text)
     diffs = [None] * len(clusters)
     kernels = [None] * len(clusters)
-    if clusters and (yes or click.confirm("\nGenerate Triton kernels?", default=True)):
+    if clusters:
         out_path = Path(out_dir)
         if not apply_edits:
             out_path.mkdir(parents=True, exist_ok=True)
@@ -198,7 +200,7 @@ def main(
                 report.render_unmapped(c, rng)
 
         if apply_edits:
-            _apply_edits(loaded, kernels, diffs, yes)
+            _apply_edits(loaded, kernels, diffs)
 
     validations = _measure(clusters, kernels, gm, specs, vs_inductor)
 
