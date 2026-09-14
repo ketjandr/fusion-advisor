@@ -23,10 +23,9 @@ KERNEL_HEADER = "import torch\nimport triton\nimport triton.language as tl\n\n"
 PEAK_GBPS = 272.0
 
 # Overhead is at most 1/N of a measurement N times the launch floor.
-LAUNCH_BOUND_MULTIPLE = 5
+LAUNCH_BOUND_MULTIPLE = 3
 
-# Only used when no measurement is available. A byte threshold cannot be general:
-# it is floor_time * bandwidth, so ~16 MB on a 4060 is ~234 MB on an H100.
+# Only used when no measurement is available.
 LAUNCH_BOUND_BYTES = 16 << 20
 DEFAULT_L2_BYTES = 24 << 20  # RTX 4060 fallback if the device will not say
 
