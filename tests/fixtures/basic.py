@@ -78,6 +78,15 @@ class SumReduction(nn.Module):
         return (x * 2.0).sum(-1)
 
 
+class UnlowerableOp(nn.Module):
+    """Model containing a pointwise op with no supported lowering."""
+
+    def forward(self, x):
+        h = F.relu(x)
+        h = h.float()
+        return h * 2.0
+
+
 class OpaqueBarrier(nn.Module):
     """matmul between two chains - must yield TWO clusters."""
 

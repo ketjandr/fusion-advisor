@@ -19,7 +19,6 @@ class RejectionReason(Enum):
     NO_LOWERING = "op has no Triton lowering rule"
     REDUCTION_TOO_LARGE = "reduced axis exceeds one block"
     UNSUPPORTED_REDUCTION = "reduction is not a single reduction over the last axis"
-    UNSUPPORTED_BROADCAST = "operand broadcast pattern not expressible yet"
 
 
 @dataclass

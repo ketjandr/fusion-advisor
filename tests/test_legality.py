@@ -8,6 +8,7 @@ from fusion_advisor.analysis.legality import (
     MAX_REDUCTION_BLOCK,
     check_convexity,
     check_fan_out,
+    check_lowering,
     check_reduction,
     escaping_nodes,
 )
@@ -137,6 +138,17 @@ def test_two_reductions_in_one_cluster_is_rejected():
     """mean+var in one pass needs Welford, v2."""
     _, rej = reasons(TwoReductions(), (8, 16))
     assert RejectionReason.UNSUPPORTED_REDUCTION in rej
+
+
+def test_unlowerable_op_is_rejected_not_crashed():
+    """Otherwise the cluster is reported, then dies in emit."""
+    _, rej = reasons(basic.UnlowerableOp(), (4, 64))
+    assert RejectionReason.NO_LOWERING in rej
+
+
+def test_lowerable_cluster_passes():
+    c = cluster(basic.ElementwiseChain(), "mul", "relu", "add")
+    assert check_lowering(c) is None
 
 
 def test_pointwise_clusters_are_unaffected():

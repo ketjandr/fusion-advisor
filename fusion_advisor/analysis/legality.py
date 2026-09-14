@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 import torch.fx as fx
 
+from ..codegen.lowering import has_lowering
 from ..ir.op_registry import OpCategory, classify, reduction_axis
 from ..ir.shapes import Dim
 from .cluster import RejectionReason
@@ -97,6 +98,11 @@ def check_shapes(cluster_nodes, specs) -> RejectionReason | None:
         if out is None:
             return RejectionReason.SHAPE_MISMATCH
     return None
+
+
+def check_lowering(cluster_nodes) -> RejectionReason | None:
+    """Reject here rather than crashing in emit, so the user gets a reason."""
+    return None if all(has_lowering(n) for n in cluster_nodes) else RejectionReason.NO_LOWERING
 
 
 MAX_REDUCTION_BLOCK = 16384  # unmeasured guess; compile_kernel is the real gate

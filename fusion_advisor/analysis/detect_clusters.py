@@ -10,6 +10,7 @@ from .legality import (
     check_aliasing,
     check_convexity,
     check_fan_out,
+    check_lowering,
     check_reduction,
     check_shapes,
     escaping_nodes,
@@ -33,6 +34,7 @@ def _first_failure(candidate: list[fx.Node], specs):
         or check_shapes(candidate, specs)
         or check_aliasing(candidate)
         or check_reduction(candidate, specs)
+        or check_lowering(candidate)
     )
 
 
