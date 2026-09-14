@@ -32,7 +32,7 @@ Fusion Advisor operates on a specialized pre-IR compiler pipeline.
 | **Source mapping** | cluster + provenance | line range, quality tag, red/green diff |
 
 Everything up to validation is CPU-only (`triton` is emitted as text, never
-imported), so detection, costing, and codegen are testable on a laptop.
+imported), so detection, costing, and codegen are testable on CPU-only machine.
 
 ### Tracing
 
@@ -62,10 +62,9 @@ Consider a transformer residual where `relu` feeds both `mul` and an external
 
 The component `{relu, mul, add}` fails fan-out because `relu` escapes. Rather
 than reject everything, the pass drops `relu` and retries on `{mul, add}` -
-the fusable tail survives. This is how real transformer blocks produce clusters
-despite residual connections.
+the fusable tail survives.
 
-Fan-out is **not** `len(node.users) > 1` - a reconverging diamond like
+Note that fan-out is **not** `len(node.users) > 1`, since a reconverging diamond like
 `x * 2.0 + x` has two users *inside* the group, so `x` stays in a register.
 The real predicate is whether any consumer lies outside.
 
