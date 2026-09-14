@@ -1,6 +1,7 @@
 """Run from the repository root:
 
-fusion-advisor --model examples/example_net.py --input-shape 16384,1024 --apply
+fusion-advisor --model examples/example_net.py \
+    --input-shape 16384,1024 --dtype int64 --out-dir generated/example_net --apply
 """
 
 import torch

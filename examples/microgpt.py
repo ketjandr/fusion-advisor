@@ -1,7 +1,7 @@
 """Run from the repository root:
 
 fusion-advisor --model examples/microgpt.py \
-    --input-shape 32,256 --dtype int64 --out-dir generated/microgpt -- apply
+    --input-shape 32,256 --dtype int64 --out-dir generated/microgpt --apply
 """
 
 from __future__ import annotations
