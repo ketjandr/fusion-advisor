@@ -113,7 +113,14 @@ def test_json_payload(runner, tmp_path):
     assert cluster["traffic"]["unfused_bytes"] > cluster["traffic"]["fused_bytes"]
     assert cluster["mapping"]["quality"] == "exact"
     assert cluster["diff"]["added"]
-    assert cluster["validation"] is None  # nothing measured without a GPU
+
+    # measured only where there is a GPU; the field exists either way
+    from fusion_advisor.validate.bench import gpu_available
+
+    if gpu_available():
+        assert cluster["validation"]["compiled"] is True
+    else:
+        assert cluster["validation"] is None
 
 
 def test_no_fusable_clusters(runner, tmp_path):

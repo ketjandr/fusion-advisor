@@ -8,7 +8,7 @@ from rich.table import Table
 from ..sourcemap.provenance import MappingQuality
 from ..validate.bench import CacheRegime
 
-console = Console()
+console = Console(highlight=False)  # auto-styling splits "2.00x" across colour codes
 
 _QUALITY_STYLE = {
     MappingQuality.EXACT: "green",

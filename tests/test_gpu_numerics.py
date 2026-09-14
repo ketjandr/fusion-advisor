@@ -15,7 +15,21 @@ from fusion_advisor.analysis.detect_clusters import detect
 from fusion_advisor.codegen.emit import emit
 from fusion_advisor.ir.shapes import propagate
 from fusion_advisor.ir.trace import trace
+from fusion_advisor.validate.harness import extract_subgraph
 from tests.fixtures import basic
+
+
+class _Capture(torch.fx.Interpreter):
+    """Records every node's value from one real forward pass."""
+
+    def __init__(self, gm):
+        super().__init__(gm)
+        self.values = {}
+
+    def run_node(self, n):
+        self.values[n.name] = out = super().run_node(n)
+        return out
+
 
 triton = pytest.importorskip("triton", reason="needs triton")
 
@@ -41,15 +55,24 @@ def load_kernel(kernel, tmp_path):
 
 
 def build(model, *input_shapes, tmp_path):
-    """Full pipeline: trace -> shapes -> detect -> emit -> import."""
+    """Full pipeline; returns (fused fn, cluster args, eager reference).
+
+    Cluster args are not the model's args: a cluster can take a parameter
+    (a get_attr, like a bias) that never appears in forward()'s signature.
+    """
     gm = trace(model)
-    inputs = tuple(torch.randn(*s, device="cuda") for s in input_shapes)
-    specs = propagate(gm, *inputs)
+    model_inputs = tuple(torch.randn(*s, device="cuda") for s in input_shapes)
+    specs = propagate(gm, *model_inputs)
     clusters, _ = detect(gm, specs)
     assert len(clusters) == 1, f"expected 1 cluster, got {len(clusters)}"
+    cluster = clusters[0]
 
-    kernel = emit(clusters[0], specs)
-    return load_kernel(kernel, tmp_path), inputs, kernel
+    capture = _Capture(gm)
+    capture.run(*model_inputs)
+    args = tuple(capture.values[n.name] for n in cluster.inputs)
+
+    fn = load_kernel(emit(cluster, specs), tmp_path)
+    return fn, args, extract_subgraph(gm, cluster).cuda()
 
 
 @pytest.mark.parametrize(
@@ -64,22 +87,22 @@ def build(model, *input_shapes, tmp_path):
 def test_kernel_matches_eager(make, shapes, tmp_path):
     """The whole point: fused output == eager output."""
     model = make().cuda()
-    fn, inputs, _ = build(model, *shapes, tmp_path=tmp_path)
-    torch.testing.assert_close(fn(*inputs), model(*inputs))
+    fn, args, reference = build(model, *shapes, tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*args), reference(*args))
 
 
 def test_non_multiple_of_block_size(tmp_path):
     """Tail block - mask must suppress the out-of-range lanes."""
     model = basic.ElementwiseChain().cuda()
-    fn, inputs, _ = build(model, (3, 101), tmp_path=tmp_path)  # 303 elements
-    torch.testing.assert_close(fn(*inputs), model(*inputs))
+    fn, args, reference = build(model, (3, 101), tmp_path=tmp_path)  # 303 elements
+    torch.testing.assert_close(fn(*args), reference(*args))
 
 
 def test_backward_stub_raises_rather_than_detaching(tmp_path):
     """Forward-only for now, so backward must refuse instead of silently no-op."""
     model = basic.ElementwiseChain().cuda()
-    fn, inputs, _ = build(model, (4, 64), tmp_path=tmp_path)
-    x = inputs[0].detach().requires_grad_(True)
+    fn, args, _ = build(model, (4, 64), tmp_path=tmp_path)
+    x = args[0].detach().requires_grad_(True)
     assert fn(x).grad_fn is not None  # still wired into the graph
     with pytest.raises(NotImplementedError, match="not generated yet"):
         (fn(x) + x).sum().backward()
@@ -131,16 +154,16 @@ def test_broadcast_bias_matches_eager(tmp_path):
     """[D] bias against [B,S,D] - needs its own offset, not the flat one."""
     model = basic.BroadcastBias().cuda()
     model.bias.data = torch.randn(64, device="cuda")  # zeros would hide an index bug
-    fn, inputs, _ = build(model, (4, 16, 64), tmp_path=tmp_path)
-    torch.testing.assert_close(fn(*inputs), model(*inputs))
+    fn, args, reference = build(model, (4, 16, 64), tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*args), reference(*args))
 
 
 def test_broadcast_is_not_accidentally_elementwise(tmp_path):
     """A wrong index still returns the right shape, so check the values."""
     model = basic.BroadcastBias().cuda()
     model.bias.data = torch.arange(64, device="cuda").float()  # distinct per column
-    fn, inputs, _ = build(model, (4, 16, 64), tmp_path=tmp_path)
-    torch.testing.assert_close(fn(*inputs), model(*inputs))
+    fn, args, reference = build(model, (4, 16, 64), tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*args), reference(*args))
 
 
 @pytest.mark.xfail(reason="reduction skeleton body not wired up", strict=False)
