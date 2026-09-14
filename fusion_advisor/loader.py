@@ -16,6 +16,7 @@ _DTYPES = {
     "float16": torch.float16, "fp16": torch.float16, "half": torch.float16,
     "bfloat16": torch.bfloat16, "bf16": torch.bfloat16,
     "float64": torch.float64, "fp64": torch.float64, "double": torch.float64,
+    "int64": torch.int64, "long": torch.int64,
 }
 
 

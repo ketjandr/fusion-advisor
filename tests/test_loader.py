@@ -132,7 +132,13 @@ def test_parse_shape_rejects(bad):
 
 @pytest.mark.parametrize(
     ("text", "expected"),
-    [("float32", torch.float32), ("fp16", torch.float16), ("torch.bfloat16", torch.bfloat16)],
+    [
+        ("float32", torch.float32),
+        ("fp16", torch.float16),
+        ("torch.bfloat16", torch.bfloat16),
+        ("int64", torch.int64),
+        ("long", torch.int64),
+    ],
 )
 def test_parse_dtype(text, expected):
     assert parse_dtype(text) is expected
@@ -147,3 +153,10 @@ def test_build_example_input():
     t = build_example_input((2, 8), torch.float16)
     assert t.shape == (2, 8)
     assert t.dtype is torch.float16
+
+
+def test_build_integer_example_input():
+    t = build_example_input((2, 8), torch.int64)
+    assert t.shape == (2, 8)
+    assert t.dtype is torch.int64
+    assert torch.equal(t, torch.ones_like(t))
