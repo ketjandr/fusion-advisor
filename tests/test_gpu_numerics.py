@@ -127,10 +127,18 @@ def test_validate_end_to_end():
     assert b.cluster_fused.median_ms > 0
 
 
-@pytest.mark.xfail(reason="broadcast index derivation not implemented", strict=False)
 def test_broadcast_bias_matches_eager(tmp_path):
     """[D] bias against [B,S,D] - needs its own offset, not the flat one."""
     model = basic.BroadcastBias().cuda()
+    model.bias.data = torch.randn(64, device="cuda")  # zeros would hide an index bug
+    fn, inputs, _ = build(model, (4, 16, 64), tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*inputs), model(*inputs))
+
+
+def test_broadcast_is_not_accidentally_elementwise(tmp_path):
+    """A wrong index still returns the right shape, so check the values."""
+    model = basic.BroadcastBias().cuda()
+    model.bias.data = torch.arange(64, device="cuda").float()  # distinct per column
     fn, inputs, _ = build(model, (4, 16, 64), tmp_path=tmp_path)
     torch.testing.assert_close(fn(*inputs), model(*inputs))
 

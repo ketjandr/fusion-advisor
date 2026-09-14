@@ -1,13 +1,14 @@
 """Tests for codegen - emit produces valid, structurally correct Triton."""
 
 import ast
+import math
 from types import SimpleNamespace
 
 import pytest
 import torch
 
 from fusion_advisor.analysis.detect_clusters import detect
-from fusion_advisor.codegen.emit import emit
+from fusion_advisor.codegen.emit import broadcast_index, emit
 from fusion_advisor.codegen.lowering import has_lowering, lower
 from fusion_advisor.ir.shapes import propagate
 from fusion_advisor.ir.trace import trace
@@ -142,6 +143,53 @@ def test_generated_wrapper_runs_under_no_grad():
     fn = load_wrapper(emit(cluster, specs))
     with torch.no_grad():
         assert fn(torch.randn(4, 64, requires_grad=True)).shape == (4, 64)
+
+
+BROADCASTS = [
+    ((4, 64), (4, 64)),  # identical, no index math
+    ((64,), (4, 16, 64)),  # a [D] bias against [B, S, D]
+    ((1, 1, 8, 8), (2, 4, 8, 8)),  # an attention mask
+    ((1,), (4, 64)),  # scalar against everything
+    ((16, 1), (16, 64)),  # broadcast on the trailing dim, not the leading one
+    ((3, 1, 5), (3, 4, 5)),  # a 1 in the middle
+    ((1, 7), (2, 3, 7)),  # fewer dims and a leading 1
+    ((2, 1, 1), (2, 3, 5)),
+]
+
+
+@pytest.mark.parametrize(("in_dims", "out_dims"), BROADCASTS, ids=str)
+def test_broadcast_index_matches_torch(in_dims, out_dims):
+    """Evaluate the emitted index and compare against torch's own broadcast."""
+    expr = broadcast_index(in_dims, out_dims)
+    x = torch.arange(math.prod(in_dims)).reshape(in_dims)
+    offs = torch.arange(math.prod(out_dims))
+    got = x.reshape(-1)[eval(expr, {"offs": offs})]
+    torch.testing.assert_close(got, x.broadcast_to(out_dims).reshape(-1))
+
+
+def test_same_shape_needs_no_index_math():
+    assert broadcast_index((4, 64), (4, 64)) == "offs"
+
+
+def test_fully_broadcast_operand_stays_a_block():
+    """`0` would load a scalar where the rest of the kernel expects a vector."""
+    assert broadcast_index((1,), (4, 64)) == "offs * 0"
+
+
+def test_broadcast_kernel_indexes_the_bias_separately():
+    cluster, specs = first_cluster(basic.BroadcastBias(), (4, 16, 64))
+    src = emit(cluster, specs).kernel_source
+    ast.parse(src)
+    assert "% 64" in src, "the [64] bias must not share the flat offset"
+
+
+def test_wrapper_sizes_output_from_the_right_input():
+    """empty_like(in0) is wrong when in0 is the bias rather than the activation."""
+    cluster, specs = first_cluster(basic.BroadcastBias(), (4, 16, 64))
+    kernel = emit(cluster, specs)
+    fn = load_wrapper(kernel)
+    out = fn(torch.randn(4, 16, 64), torch.zeros(64))
+    assert out.shape == (4, 16, 64)
 
 
 def test_softmax_uses_dim_not_axis():

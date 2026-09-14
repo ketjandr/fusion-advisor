@@ -35,6 +35,26 @@ def _indent(lines: list[str], spaces: int = 4) -> str:
     return "\n".join(pad + ln for ln in lines)
 
 
+def broadcast_index(in_dims: tuple[int, ...], out_dims: tuple[int, ...]) -> str:
+    """Flat index into an operand, given the flat output index `offs`."""
+    if tuple(in_dims) == tuple(out_dims):
+        return "offs"
+
+    pad = len(out_dims) - len(in_dims)  # right-align, numpy style
+    terms, out_div, in_stride = [], 1, 1
+    for i in reversed(range(len(out_dims))):
+        j = i - pad
+        size = in_dims[j] if j >= 0 else 1
+        if size != 1:  # a size-1 or absent dim contributes nothing
+            coord = "offs" if out_div == 1 else f"offs // {out_div}"
+            coord = f"({coord}) % {out_dims[i]}"
+            terms.append(coord if in_stride == 1 else f"({coord}) * {in_stride}")
+            in_stride *= size
+        out_div *= out_dims[i]
+
+    return " + ".join(reversed(terms)) or "offs * 0"  # all broadcast, still a block
+
+
 def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
     """Emit a Triton kernel + wrapper for one cluster."""
     nodes = cluster.nodes
@@ -45,7 +65,9 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
     node_to_var: dict[fx.Node, str] = {}
     var_count = 0
 
-    # tl.load lines (one per external input)
+    out_dims = specs[escaping[0].name].dims
+
+    # tl.load lines, one per external input
     load_lines: list[str] = []
     in_ptrs: list[str] = []
     for i, inp in enumerate(inputs):
@@ -53,7 +75,8 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
         var = f"v{var_count}"
         in_ptrs.append(ptr)
         node_to_var[inp] = var
-        load_lines.append(f"{var} = tl.load({ptr} + offs, mask=mask)")
+        index = broadcast_index(specs[inp.name].dims, out_dims)
+        load_lines.append(f"{var} = tl.load({ptr} + ({index}), mask=mask)")
         var_count += 1
 
     # walk cluster nodes in order, resolve args, lower
@@ -99,12 +122,13 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
     # assemble wrapper
     in_args = [f"in{i}" for i in range(len(in_ptrs))]
     args = ", ".join(in_args)
+    like = in_args[next((i for i, n in enumerate(inputs) if specs[n.name].dims == out_dims), 0)]
     wrapper_lines = [
         f"class _{name}(torch.autograd.Function):",
         "    @staticmethod",
         f"    def forward(ctx, {args}):",
-        f"        out0 = torch.empty_like({in_args[0]})",
-        f"        n = {in_args[0]}.numel()",
+        f"        out0 = torch.empty_like({like})",
+        f"        n = {like}.numel()",
         "        grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)",
         f"        {name}_kernel[grid]({args}, out0, n, BLOCK_SIZE=1024)",
         f"        ctx.save_for_backward({args})  # what a backward kernel will need",
@@ -112,8 +136,7 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
         "",
         "    @staticmethod",
         "    def backward(ctx, grad_out):",
-        f"        # TODO: {name}_backward_kernel. Inputs are in ctx.saved_tensors;",
-        "        # what is missing is a derivative rule per op, chained in reverse.",
+        "        # TODO: a derivative rule per op, chained in reverse over saved_tensors",
         f'        raise NotImplementedError("{name}: backward not generated yet")',
         "",
         "",
