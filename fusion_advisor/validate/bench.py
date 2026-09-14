@@ -146,6 +146,8 @@ def compile_kernel(kernel, out_dir: Path | None = None):
 
     Must go through a real file: @triton.jit calls inspect.getsourcelines on the
     kernel, and a function exec'd from a string has no source to read back.
+    Importing registers the JIT function; Triton compilation happens lazily on
+    the wrapper's first invocation in `validate`.
     """
     out_dir = Path(out_dir or tempfile.mkdtemp(prefix="fusion_advisor_"))
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -222,7 +224,19 @@ def validate(
     args = allocate_inputs(cluster, specs)
     reference = extract_subgraph(gm, cluster).cuda()
     with torch.no_grad():
-        want, got = reference(*args), fused(*args)
+        want = reference(*args)
+        try:
+            # @triton.jit compiles here, not while importing the generated file.
+            got = fused(*args)
+        except Exception as e:  # noqa: BLE001 - compiler/runtime errors vary by Triton version
+            return ValidationResult(
+                False,
+                None,
+                None,
+                None,
+                None,
+                f"JIT compile or first launch failed: {type(e).__name__}: {e}",
+            )
     max_err = (got - want).abs().max().item()
     numerics_ok = torch.allclose(got, want, atol=atol, rtol=rtol)
     if not numerics_ok:

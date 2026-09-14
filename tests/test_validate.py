@@ -243,3 +243,31 @@ def test_validate_degrades_without_a_gpu():
     assert result.compiled is False
     assert result.numerics_ok is None
     assert "no CUDA" in result.skipped_reason
+
+
+def test_validate_catches_lazy_jit_failure(monkeypatch):
+    """Triton compiles on first call; that failure must not abort the CLI."""
+    import fusion_advisor.validate.bench as bench
+
+    gm, clusters, specs, _ = pipeline(basic.ElementwiseChain(), (4, 64))
+
+    class Reference:
+        def cuda(self):
+            return self
+
+        def __call__(self, x):
+            return x
+
+    def fails_on_first_call(*args):
+        raise RuntimeError("synthetic lazy compiler failure")
+
+    monkeypatch.setattr(bench, "gpu_available", lambda: True)
+    monkeypatch.setattr(bench, "compile_kernel", lambda kernel: fails_on_first_call)
+    monkeypatch.setattr(bench, "allocate_inputs", lambda cluster, specs: [torch.ones(4, 64)])
+    monkeypatch.setattr(bench, "extract_subgraph", lambda gm, cluster: Reference())
+
+    result = bench.validate(None, clusters[0], gm, specs)
+    assert result.compiled is False
+    assert result.numerics_ok is None
+    assert "JIT compile or first launch failed" in result.skipped_reason
+    assert "synthetic lazy compiler failure" in result.skipped_reason

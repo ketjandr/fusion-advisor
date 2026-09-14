@@ -130,6 +130,16 @@ def test_boolean_operand_is_not_loaded_with_inf():
     assert "other=" not in src
 
 
+def test_negative_infinity_scalar_is_a_defined_literal():
+    """A bare `-inf` parses but fails later when Triton resolves the name."""
+    gm = trace(basic.NegativeInfinityMask())
+    specs = propagate(gm, torch.randn(4, 16), torch.zeros(4, 16, dtype=torch.bool))
+    clusters, _ = detect(gm, specs)
+    src = emit(clusters[0], specs).kernel_source
+    assert '-float("inf")' in src
+    assert ", -inf," not in src
+
+
 def test_reduction_grid_is_one_program_per_row():
     wrapper = reduction_kernel(cols=16).wrapper_source
     assert "[(4,)]" in wrapper

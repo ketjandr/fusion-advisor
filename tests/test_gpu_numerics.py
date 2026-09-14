@@ -179,6 +179,19 @@ def test_reduction_matches_eager(tmp_path, cols):
     torch.testing.assert_close(fn(x, mask), model(x, mask))
 
 
+def test_negative_infinity_attention_mask_matches_eager(tmp_path):
+    """Regression: emitting float('-inf') must not produce an undefined `inf` name."""
+    model = basic.NegativeInfinityMask().cuda()
+    gm = trace(model)
+    x = torch.randn(8, 64, device="cuda")
+    mask = torch.randint(0, 2, (8, 64), device="cuda").bool()
+    mask[:, 0] = False  # keep every softmax row finite
+    specs = propagate(gm, x, mask)
+    clusters, _ = detect(gm, specs)
+    fn = load_kernel(emit(clusters[0], specs), tmp_path)
+    torch.testing.assert_close(fn(x, mask), model(x, mask))
+
+
 @pytest.mark.parametrize("cols", [64, 100], ids=["pow2", "ragged"])
 def test_collapsing_reduction_matches_eager(tmp_path, cols):
     """sum(-1) returns one value per row."""

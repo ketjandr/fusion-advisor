@@ -71,6 +71,15 @@ class ReductionBoundary(nn.Module):
         return F.softmax(x, dim=-1)
 
 
+class NegativeInfinityMask(nn.Module):
+    """Causal-attention spelling: masked logits use negative infinity."""
+
+    def forward(self, x, mask):
+        x = x * 0.125
+        x = x.masked_fill(mask, float("-inf"))
+        return F.softmax(x, dim=-1)
+
+
 class SumReduction(nn.Module):
     """Reduction that collapses the row, so the store is one scalar per program."""
 

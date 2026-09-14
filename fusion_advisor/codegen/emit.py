@@ -24,10 +24,16 @@ def _resolve_arg(arg, node_to_var: dict[fx.Node, str]) -> str:
     """Turn an fx arg into a Triton expression fragment."""
     if isinstance(arg, fx.Node):
         return node_to_var[arg]
-    if isinstance(arg, (int, float)):
-        return repr(arg)
     if isinstance(arg, bool):
-        return "True" if arg else "False"
+        return repr(arg)
+    if isinstance(arg, float):
+        if math.isnan(arg):
+            return 'float("nan")'
+        if math.isinf(arg):
+            return '-float("inf")' if arg < 0 else 'float("inf")'
+        return repr(arg)
+    if isinstance(arg, int):
+        return repr(arg)
     return repr(arg)
 
 
