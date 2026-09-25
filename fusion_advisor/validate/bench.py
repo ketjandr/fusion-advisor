@@ -33,7 +33,12 @@ class CacheRegime(Enum):
     DRAM_BOUND = "dram-bound"  # the regime traffic.py describes
 
     @staticmethod
-    def classify(working_set_bytes: int, median_ms: float | None = None) -> CacheRegime:
+    def classify(
+        working_set_bytes: int,
+        median_ms: float | None = None,
+        achieved_gbps: float | None = None,
+        peak_gbps: float | None = None,
+    ) -> CacheRegime:
         """Pass `median_ms` when you have one - bytes alone cannot see the floor."""
         floor = launch_floor_ms()
         if median_ms is not None and floor > 0:
@@ -45,6 +50,8 @@ class CacheRegime(Enum):
             return CacheRegime.LAUNCH_BOUND
         if working_set_bytes < l2_bytes():
             return CacheRegime.L2_RESIDENT
+        if achieved_gbps and peak_gbps and achieved_gbps > peak_gbps:
+            return CacheRegime.L2_RESIDENT  # faster than DRAM allows, so it hit cache
         return CacheRegime.DRAM_BOUND
 
 
@@ -65,7 +72,14 @@ def launch_floor_ms() -> float:
     if not torch.cuda.is_available():
         return 0.0
     x = torch.ones(1, device="cuda")
-    return time_fn(torch.relu, (x,), 0, warmup=10, iters=50).median_ms
+    # long run so the floor, and every label near it, is stable across runs
+    return time_fn(torch.relu, (x,), 0, warmup=50, iters=500, flush_l2=False).median_ms
+
+
+@functools.cache
+def _l2_flush_buffer() -> torch.Tensor:
+    """Scratch twice the size of L2; writing it evicts the last iteration's data."""
+    return torch.empty(2 * l2_bytes(), dtype=torch.uint8, device="cuda")
 
 
 @dataclass
@@ -174,19 +188,20 @@ def compile_kernel(kernel, out_dir: Path | None = None):
     return getattr(mod, kernel.name)
 
 
-def time_fn(fn, args, bytes_moved: int, warmup: int = 25, iters: int = 100) -> Timing:
-    """Median wall time over `iters` launches, timed with CUDA events.
-
-    No L2 flush between iterations: a small working set stays cached, which is
-    the honest thing to report as long as the regime is reported alongside it.
-    """
+def time_fn(
+    fn, args, bytes_moved: int, warmup: int = 25, iters: int = 100, flush_l2: bool = True
+) -> Timing:
+    """Median wall time over `iters` launches, timed with CUDA events, L2 cold each time."""
     for _ in range(warmup):
         fn(*args)
     torch.cuda.synchronize()
 
+    flush = _l2_flush_buffer() if flush_l2 else None
     samples = []
     for _ in range(iters):
         start, end = (torch.cuda.Event(enable_timing=True) for _ in range(2))
+        if flush is not None:
+            flush.zero_()  # queued before start, so it is not timed
         start.record()
         fn(*args)
         end.record()
@@ -269,14 +284,16 @@ def validate(
     cluster_fused = time_fn(fused, args, nbytes)
     configured_peak = peak_gbps is not None
     peak_gbps = peak_gbps if configured_peak else detect_peak_gbps()
+    regime = CacheRegime.classify(
+        nbytes, cluster_fused.median_ms, cluster_fused.achieved_gbps, peak_gbps
+    )
     return ValidationResult(
         compiled=True,
         numerics_ok=True,
         model_numerics_ok=True,
         max_abs_err=max_err,
         benchmark=BenchmarkResult(
-            # classify from the measurement, not the byte count
-            regime=CacheRegime.classify(nbytes, cluster_fused.median_ms),
+            regime=regime,  # from the measurement, not the byte count
             working_set_bytes=nbytes,
             cluster_eager=time_fn(reference, args, nbytes),
             cluster_fused=cluster_fused,

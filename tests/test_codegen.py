@@ -188,8 +188,20 @@ def test_has_lowering_matches_registry():
     from fusion_advisor.ir.op_registry import BINARY_FNS, UNARY_FNS
 
     for target in list(UNARY_FNS) + list(BINARY_FNS):
-        node = SimpleNamespace(op="call_function", target=target)
+        node = SimpleNamespace(op="call_function", target=target, args=(), kwargs={"training": False})
         assert has_lowering(node), f"missing lowering for {target}"
+
+
+def test_training_dropout_has_no_lowering():
+    """The identity rule would silently drop the mask."""
+    from types import SimpleNamespace
+
+    import torch.nn.functional as F
+
+    train = SimpleNamespace(op="call_function", target=F.dropout, args=(), kwargs={"training": True})
+    default = SimpleNamespace(op="call_function", target=F.dropout, args=(), kwargs={})
+    assert not has_lowering(train)
+    assert not has_lowering(default)  # F.dropout defaults to training=True
 
 
 def load_wrapper(kernel):

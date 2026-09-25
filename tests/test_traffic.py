@@ -50,3 +50,12 @@ def test_longer_chain_saves_more():
 
 def test_savings_ratio_handles_empty():
     assert TrafficEstimate(unfused_bytes=0, fused_bytes=0).savings_ratio == 0.0
+
+
+def test_eval_dropout_moves_no_bytes():
+    """gelu -> dropout -> +x: eager runs gelu and add only, 5 tensor passes not 7."""
+    cluster, specs = one_cluster(basic.ModuleStyle().eval(), (4, 16, 32))
+    t = 4 * 16 * 32 * 4  # every edge is one fp32 [4,16,32] tensor
+    est = estimate(cluster, specs)
+    assert est.unfused_bytes == 5 * t  # gelu r+w, add r+r+w
+    assert est.fused_bytes == 3 * t  # linear and x in, add out

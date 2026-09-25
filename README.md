@@ -86,9 +86,9 @@ unfused = Σ (operand reads + result writes) per op
 fused   = external inputs read once + escaping outputs written once
 ```
 
-DRAM upper bound, no cache model. Measurements are tagged by regime:
+DRAM upper bound, no cache model. Measurements flush L2 before every timed launch and are tagged by regime:
 `launch-bound` (wall time is launch overhead - no speedup printed),
-`l2-resident` (fits in L2, ratio overstates DRAM savings), or
+`l2-resident` (fits in L2, or beat DRAM peak - ratio overstates DRAM savings), or
 `dram-bound` (traffic estimate applies directly).
 
 ### Lowering

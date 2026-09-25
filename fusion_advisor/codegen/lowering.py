@@ -5,6 +5,8 @@ import operator
 import torch
 import torch.nn.functional as F
 
+from ..ir.op_registry import is_training_dropout
+
 _INV_SQRT2 = "0.7071067811865476"
 
 # target -> fn(operand_exprs...) -> Triton expression string
@@ -104,6 +106,8 @@ def reduction_identity(node) -> str:
 
 def has_lowering(node) -> bool:
     """True if we can emit Triton for this node."""
+    if is_training_dropout(node):  # the identity rule below would drop the mask
+        return False
     if node.op == "call_function":
         return node.target in POINTWISE_RULES or node.target in REDUCTION_RULES
     if node.op == "call_method":

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 import torch.fx as fx
 
+from ..ir.op_registry import is_identity
+
 
 @dataclass
 class TrafficEstimate:
@@ -41,6 +43,8 @@ def estimate(cluster, specs) -> TrafficEstimate:
     """
     unfused = 0
     for n in cluster.nodes:
+        if is_identity(n):  # eval dropout aliases its input, so eager moves nothing
+            continue
         unfused += _node_bytes(n, specs)  # write to VRAM
         for a in n.args:
             if isinstance(a, fx.Node):

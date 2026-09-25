@@ -4,7 +4,7 @@ from collections import deque
 
 import torch.fx as fx
 
-from ..ir.op_registry import OpCategory, classify
+from ..ir.op_registry import OpCategory, classify, is_identity
 from .cluster import ClusterCategory, FusableCluster, RejectedCandidate
 from .legality import (
     check_aliasing,
@@ -45,6 +45,11 @@ def _without_extra_escapes(component: list[fx.Node]) -> list[fx.Node] | None:
         return None
     result = escaping[-1]  # topologically last, so the value the cluster produces
     return [n for n in component if n is result or n not in escaping]
+
+
+def _real_ops(nodes) -> int:
+    """Members that do work; eval dropout alone gives fusion nothing to save."""
+    return sum(not is_identity(n) for n in nodes)
 
 
 def _can_absorb(cat: OpCategory) -> bool:
@@ -96,7 +101,7 @@ def detect(gm, specs) -> tuple[list[FusableCluster], list[RejectedCandidate]]:
         component = _find_component(node, absorbable, visited)
         component.sort(key=lambda n: topo_index[n])
 
-        if len(component) < 2:
+        if _real_ops(component) < 2:
             continue
 
         reason = _first_failure(component, specs)
@@ -106,6 +111,8 @@ def detect(gm, specs) -> tuple[list[FusableCluster], list[RejectedCandidate]]:
                 break
             component, reason = smaller, _first_failure(smaller, specs)
 
+        if reason is None and _real_ops(component) < 2:
+            continue  # shrinking left a single real op, nothing to fuse
         if reason is None:
             clusters.append(FusableCluster(
                 index=len(clusters),

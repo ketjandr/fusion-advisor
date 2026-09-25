@@ -299,3 +299,45 @@ def test_validate_catches_lazy_jit_failure(monkeypatch):
     assert result.numerics_ok is None
     assert "JIT compile or first launch failed" in result.skipped_reason
     assert "synthetic lazy compiler failure" in result.skipped_reason
+
+
+# --- 2b: a bandwidth above peak is cache, never DRAM ---
+
+
+def test_faster_than_dram_is_relabelled_l2():
+    assert CacheRegime.classify(512 << 20, None, 470.0, 256.0) is CacheRegime.L2_RESIDENT
+
+
+def test_under_peak_stays_dram_bound():
+    assert CacheRegime.classify(512 << 20, None, 200.0, 256.0) is CacheRegime.DRAM_BOUND
+
+
+def test_unknown_peak_does_not_relabel():
+    assert CacheRegime.classify(512 << 20, None, 470.0, None) is CacheRegime.DRAM_BOUND
+
+
+def test_above_peak_is_never_printed_as_a_percentage(capsys):
+    from dataclasses import replace
+
+    from fusion_advisor.report.console import render_validation
+
+    result = fake_result(CacheRegime.L2_RESIDENT)
+    result.benchmark.cluster_fused = replace(result.benchmark.cluster_fused, achieved_gbps=470.0)
+    render_validation(SimpleNamespace(index=0), result)
+    out = capsys.readouterr().out
+    assert "173%" not in out
+    assert "above DRAM peak" in out
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not gpu_available(), reason="needs CUDA + triton")
+def test_flushed_timing_never_beats_dram_peak():
+    """Without the L2 flush a warm 16 MB input reported ~180% of peak."""
+    from fusion_advisor.validate.bench import detect_peak_gbps, time_fn
+
+    x = torch.randn(4 << 20, device="cuda")  # 16 MB in, 16 MB out
+    t = time_fn(torch.nn.functional.gelu, (x,), 2 * x.nbytes)
+    peak = detect_peak_gbps()
+    if peak is None:
+        pytest.skip("driver does not report bandwidth")
+    assert t.achieved_gbps <= 1.05 * peak

@@ -141,7 +141,9 @@ def render_validation(cluster, result) -> None:
         return
 
     bandwidth = f"fused cluster bandwidth {b.cluster_fused.achieved_gbps:.0f} GB/s"
-    if b.peak_gbps is not None:
+    if b.pct_of_peak is not None and b.pct_of_peak > 100:
+        bandwidth += " (above DRAM peak, so partly served from L2)"
+    elif b.peak_gbps is not None:
         bandwidth += (
             f" ({b.pct_of_peak:.0f}% of {b.peak_gbps:.0f} GB/s "
             f"{b.peak_source} peak memory bandwidth)"

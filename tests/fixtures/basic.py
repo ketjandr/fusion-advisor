@@ -93,11 +93,10 @@ class ResidualReadTwice(nn.Module):
     def __init__(self, d=64):
         super().__init__()
         self.norm = nn.LayerNorm(d)
-        self.drop = nn.Dropout(0.1)
 
     def forward(self, x):
         h = x + 1.0  # stands in for the attention residual
-        return h + self.drop(self.norm(h))
+        return h + F.gelu(self.norm(h))
 
 
 class UnlowerableOp(nn.Module):
@@ -107,6 +106,17 @@ class UnlowerableOp(nn.Module):
         h = F.relu(x)
         h = h.float()
         return h * 2.0
+
+
+class GeluDropout(nn.Module):
+    """One real op plus eval dropout - nothing to fuse."""
+
+    def __init__(self):
+        super().__init__()
+        self.drop = nn.Dropout(0.1)
+
+    def forward(self, x):
+        return self.drop(F.gelu(x))
 
 
 class OpaqueBarrier(nn.Module):

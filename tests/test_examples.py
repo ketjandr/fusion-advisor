@@ -29,7 +29,7 @@ def test_showcase_example_has_three_exact_clusters():
 
 
 def test_microgpt_layers_share_kernels():
-    """Two layers used to give 5 approximate clusters; twins collapse them."""
+    """Two layers gave 5 clusters; twins collapse them, eval dropout leaves only attention."""
     path = Path(__file__).parents[1] / "examples" / "microgpt.py"
     gm = trace(load(str(path)).module)
     specs = propagate(gm, torch.ones(32, 256, dtype=torch.int64))
@@ -37,7 +37,7 @@ def test_microgpt_layers_share_kernels():
     clusters = merge_twins(clusters, specs)
     nodes = list(gm.graph.nodes)
 
-    assert sorted(c.count for c in clusters) == [1, 2, 2]
-    for c in clusters:
-        if c.count == 2:  # attention softmax and MLP gelu
-            assert resolve(c, nodes).quality is MappingQuality.EXACT
+    (attention,) = clusters  # gelu+dropout and dropout+add have one real op each
+    assert attention.count == 2
+    assert [n.name for n in attention.nodes] == ["mul", "masked_fill", "softmax", "dropout_1"]
+    assert resolve(attention, nodes).quality is MappingQuality.EXACT

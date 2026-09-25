@@ -68,7 +68,7 @@ def test_external_mutation_blocks_fusion():
 def test_residual_is_dropped_so_the_rest_can_fuse():
     """The transformer shape: a whole-component reject loses the only fusable pair."""
     clusters, _ = run(basic.ResidualReadTwice(), (4, 16, 64))
-    assert [{n.name for n in c.nodes} for c in clusters] == [{"dropout", "add_1"}]
+    assert [{n.name for n in c.nodes} for c in clusters] == [{"gelu", "add_1"}]
 
 
 def test_matmul_splits_into_two_clusters():
@@ -120,8 +120,26 @@ def test_mutation_rejected():
 
 def test_module_style_forms_cluster():
     """Transparent tracing through nn.Module submodules still fuses."""
-    clusters, _ = run(basic.ModuleStyle(), (4, 16, 32))
+    clusters, _ = run(basic.ModuleStyle().eval(), (4, 16, 32))
     assert len(clusters) >= 1
+
+
+def test_training_dropout_is_rejected_not_fused():
+    clusters, rejected = run(basic.ModuleStyle(), (4, 16, 32))  # nn.Module defaults to train()
+    assert clusters == []
+    assert [r.reason for r in rejected] == [RejectionReason.NO_LOWERING]
+
+
+def test_eval_dropout_alone_is_not_a_cluster():
+    """{gelu, dropout} has one real op, so fusing saves nothing."""
+    clusters, rejected = run(basic.GeluDropout().eval(), (4, 64))
+    assert clusters == []
+    assert rejected == []
+
+
+def test_eval_dropout_does_not_count_as_an_op():
+    clusters, _ = run(basic.ModuleStyle().eval(), (4, 16, 32))
+    assert {n.name for n in clusters[0].nodes} == {"gelu", "dropout", "add"}
 
 
 def test_single_absorbable_node_discarded():

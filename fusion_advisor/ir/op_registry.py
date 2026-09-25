@@ -89,3 +89,20 @@ def reduction_axis(node, ndim: int | None = None) -> int | None:
         return None  # tuple of axes not suported yet
 
     return axis + ndim if ndim is not None and axis < 0 else axis
+
+
+def _dropout_training(node) -> bool:
+    """F.dropout's `training` flag; torch defaults it to True."""
+    if "training" in node.kwargs:
+        return bool(node.kwargs["training"])
+    return bool(node.args[2]) if len(node.args) > 2 else True
+
+
+def is_identity(node) -> bool:
+    """True for eval-mode dropout, which returns its input tensor untouched."""
+    return node.op == "call_function" and node.target is F.dropout and not _dropout_training(node)
+
+
+def is_training_dropout(node) -> bool:
+    """Dropout that actually masks; torch's RNG stream cannot be reproduced in a kernel."""
+    return node.op == "call_function" and node.target is F.dropout and _dropout_training(node)
