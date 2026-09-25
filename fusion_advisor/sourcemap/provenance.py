@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+from ..ir.trace import TRANSPARENT_MODULES
+
 # File "path", line N, in fnname
 _FRAME = re.compile(r'^File "(?P<path>.*)", line (?P<line>\d+), in (?P<fn>.*)$')
 
@@ -67,6 +69,16 @@ def _authoring_context(stack_trace: str | None):
     return (tuple(frames[:-1]), inner.path, inner.fn)  # call-site chain disambiguates
 
 
+def owner_path(node) -> str:
+    """Qualname of the user module instance that authored `node`, e.g. "blocks.0.mlp"."""
+    stack = getattr(node, "meta", {}).get("nn_module_stack", {})  # outermost first
+    owners = [
+        path for path, (_, cls) in stack.items()
+        if not (isinstance(cls, type) and issubclass(cls, TRANSPARENT_MODULES))
+    ]
+    return owners[-1] if owners else ""
+
+
 def _frames(nodes) -> dict:
     """node -> Frame, skipping nodes with no user frame."""
     out = {}
@@ -112,11 +124,12 @@ def user_variable_names(all_nodes, source_text: str) -> dict:
             continue
         f = deepest_user_frame(getattr(n, "stack_trace", None))
         if f and 1 <= f.line <= len(lines):
-            by_line.setdefault(f.line, []).append(n)
+            # per instance: repeated blocks put one node each on the same line
+            by_line.setdefault((f.line, owner_path(n)), []).append(n)
 
     # only the last node on a line produces that line's value, e.g. h = act(fc(x))
     # binds h to the activation, not to the inner call
-    for line_no, line_nodes in by_line.items():
+    for (line_no, _), line_nodes in by_line.items():
         target = _assign_target(lines[line_no - 1])
         if target:
             names[line_nodes[-1]] = target
@@ -140,7 +153,9 @@ def resolve(cluster, all_nodes) -> SourceRange:
         return SourceRange(MappingQuality.APPROXIMATE, path, start, end, _label(nodes))
 
     # a non-cluster node in range means replacing it deletes that node's code
-    inside = set(nodes)
+    # a twin on the same lines is the same code, not an intruder
+    twins = getattr(cluster, "instances", [])
+    inside = set(nodes).union(*(t.nodes for t in twins))
     for n in all_nodes:
         if n in inside or n.op in _PLUMBING:
             continue

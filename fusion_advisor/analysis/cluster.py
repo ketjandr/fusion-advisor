@@ -34,6 +34,14 @@ class FusableCluster:
     inputs: list = field(default_factory=list)
     outputs: list = field(default_factory=list)
 
+    # same source, same shapes, other module instances (e.g. blocks.1, blocks.2)
+    instances: list[FusableCluster] = field(default_factory=list)
+
+    @property
+    def count(self) -> int:
+        """Instances sharing this kernel, including this one."""
+        return 1 + len(self.instances)
+
 
 @dataclass
 class RejectedCandidate:

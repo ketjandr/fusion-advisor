@@ -7,6 +7,7 @@ import click
 
 from .analysis.detect_clusters import detect
 from .analysis.traffic import estimate
+from .analysis.twins import merge_twins
 from .codegen.emit import emit
 from .ir.shapes import ShapePropError, propagate
 from .ir.trace import TracingError, trace
@@ -167,6 +168,7 @@ def main(
 
     all_nodes = list(gm.graph.nodes)
     clusters, rejections = detect(gm, specs)
+    clusters = merge_twins(clusters, specs)
     estimates = [estimate(c, specs) for c in clusters]
     ranges = [resolve(c, all_nodes) for c in clusters]
 

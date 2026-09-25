@@ -53,6 +53,7 @@ def _cluster_payload(cluster, est, rng, diff, validation) -> dict:
         "nodes": [n.name for n in cluster.nodes],
         "inputs": [n.name for n in cluster.inputs],
         "outputs": [n.name for n in cluster.outputs],
+        "instances": [[n.name for n in t.nodes] for t in cluster.instances],
         "traffic": {
             "unfused_bytes": est.unfused_bytes,
             "fused_bytes": est.fused_bytes,

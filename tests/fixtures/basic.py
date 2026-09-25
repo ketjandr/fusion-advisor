@@ -248,3 +248,57 @@ class CustomSubmodule(nn.Module):
 
     def forward(self, x):
         return self.inner(x)
+
+
+class _ScaleBlock(nn.Module):
+    """Linear, then a scale/relu/+1 chain - one cluster per instance."""
+
+    def __init__(self, d_in=64, d_out=64, scale=2.0):
+        super().__init__()
+        self.fc = nn.Linear(d_in, d_out)
+        self.scale = scale
+
+    def forward(self, x):
+        h = self.fc(x)
+        h = h * self.scale
+        h = F.relu(h)
+        return h + 1.0
+
+
+class RepeatedBlocks(nn.Module):
+    """Two identical blocks - two clusters on the same lines, one kernel."""
+
+    def __init__(self):
+        super().__init__()
+        self.blocks = nn.ModuleList([_ScaleBlock(), _ScaleBlock()])
+
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+
+class PerLayerScale(nn.Module):
+    """Same lines, different baked-in constant - must not share a kernel."""
+
+    def __init__(self):
+        super().__init__()
+        self.blocks = nn.ModuleList([_ScaleBlock(scale=2.0), _ScaleBlock(scale=3.0)])
+
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x
+
+
+class VaryingWidthBlocks(nn.Module):
+    """Same lines, different shapes - must not share a kernel."""
+
+    def __init__(self):
+        super().__init__()
+        self.blocks = nn.ModuleList([_ScaleBlock(64, 32), _ScaleBlock(32, 16)])
+
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x

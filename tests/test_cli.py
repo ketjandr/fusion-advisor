@@ -337,3 +337,58 @@ def test_peak_gbps_override_reaches_validate(runner, tmp_path, monkeypatch):
         "504.2",
     )
     assert seen["peak_gbps"] == 504.2
+
+
+REPEATED = """
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Block(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc = nn.Linear(64, 64)
+    def forward(self, x):
+        h = self.fc(x)
+        h = h * 2.0
+        h = F.relu(h)
+        return h + 1.0
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.blocks = nn.ModuleList([Block(), Block()])
+    def forward(self, x):
+        for block in self.blocks:
+            x = block(x)
+        return x
+"""
+
+
+def test_repeated_blocks_report_one_cluster(runner, tmp_path):
+    path = tmp_path / "out.json"
+    r = run(
+        runner, tmp_path, REPEATED, "--model-class", "Net",
+        "--input-shape", "4,64", "--out-dir", str(tmp_path), "--json", str(path),
+    )
+    assert r.exit_code == 0, r.output
+    assert "1 fusable cluster(s)" in r.output
+    assert "3 x2" in r.output
+    assert "+         return cluster0(h)" in r.output
+
+    (cluster,) = json.loads(path.read_text())["clusters"]
+    assert cluster["instances"] == [["mul_1", "relu_1", "add_1"]]
+    assert cluster["mapping"]["quality"] == "exact"
+
+
+def test_totals_count_every_instance(runner, tmp_path):
+    from fusion_advisor.report.console import human_bytes
+
+    path = tmp_path / "out.json"
+    r = run(
+        runner, tmp_path, REPEATED, "--model-class", "Net",
+        "--input-shape", "4,64", "--out-dir", str(tmp_path), "--json", str(path),
+    )
+    (cluster,) = json.loads(path.read_text())["clusters"]
+    t = cluster["traffic"]
+    saved = human_bytes(2 * (t["unfused_bytes"] - t["fused_bytes"]))
+    assert f"{saved} of {human_bytes(2 * t['unfused_bytes'])}" in r.output

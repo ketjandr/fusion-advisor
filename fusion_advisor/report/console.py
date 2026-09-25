@@ -67,7 +67,7 @@ def render_clusters(clusters, estimates, ranges=None) -> None:
         table.add_row(
             str(c.index),
             c.category.value,
-            str(len(c.nodes)),
+            f"{len(c.nodes)} x{c.count}" if c.count > 1 else str(len(c.nodes)),  # x N layers
             human_bytes(est.unfused_bytes),
             human_bytes(est.fused_bytes),
             f"{est.savings_ratio:.0%}",
@@ -76,8 +76,10 @@ def render_clusters(clusters, estimates, ranges=None) -> None:
         )
     console.print(table)
 
-    saved = sum(e.unfused_bytes - e.fused_bytes for e in estimates)
-    total = sum(e.unfused_bytes for e in estimates)
+    # every instance runs the kernel, so totals scale by count
+    pairs = list(zip(clusters, estimates, strict=True))
+    saved = sum((e.unfused_bytes - e.fused_bytes) * c.count for c, e in pairs)
+    total = sum(e.unfused_bytes * c.count for c, e in pairs)
     console.print(
         f"Across {len(clusters)} cluster(s): {human_bytes(saved)} of {human_bytes(total)} "
         f"cluster-local traffic avoided.",
