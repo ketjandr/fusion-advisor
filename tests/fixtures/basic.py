@@ -119,6 +119,35 @@ class GeluDropout(nn.Module):
         return self.drop(F.gelu(x))
 
 
+class RMSNorm(nn.Module):
+    """Hand-written RMS norm - one mid-chain reduction, broadcast back over the row."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(d))
+
+    def forward(self, x):
+        h = x.pow(2).mean(-1, keepdim=True)
+        h = x * torch.rsqrt(h + 1e-6)
+        return h * self.weight
+
+
+class FractionalPower(nn.Module):
+    """Non-integer exponent - needs a real pow, not repeated multiplies."""
+
+    def forward(self, x):
+        h = x.abs() ** 1.5
+        return h * 2.0
+
+
+class TensorPower(nn.Module):
+    """Exponent is itself a tensor."""
+
+    def forward(self, x, y):
+        h = x.abs() ** y
+        return h * 2.0
+
+
 class OpaqueBarrier(nn.Module):
     """matmul between two chains - must yield TWO clusters."""
 

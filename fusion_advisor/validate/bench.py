@@ -16,7 +16,7 @@ import torch
 
 from .harness import allocate_inputs, extract_subgraph, rewrite_with_kernel, working_set_bytes
 
-KERNEL_HEADER = "import torch\nimport triton\nimport triton.language as tl\n\n"
+KERNEL_HEADER = "import torch\nimport triton\nimport triton.language as tl\nfrom triton.language.extra import libdevice\n\n"
 
 LAUNCH_BOUND_MULTIPLE = 1.5
 

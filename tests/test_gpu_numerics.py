@@ -38,7 +38,7 @@ pytestmark = [
     pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA"),
 ]
 
-HEADER = "import torch\nimport triton\nimport triton.language as tl\n\n"
+HEADER = "import torch\nimport triton\nimport triton.language as tl\nfrom triton.language.extra import libdevice\n\n"
 
 
 def load_kernel(kernel, tmp_path):
@@ -211,3 +211,22 @@ def test_every_row_is_reduced_separately(tmp_path):
     out = load_kernel(emit(clusters[0], specs), tmp_path)(x, mask)
     torch.testing.assert_close(out, model(x, mask))
     assert not torch.allclose(out[0], out[1])
+
+
+@pytest.mark.parametrize("cols", [64, 100], ids=["pow2", "ragged"])
+def test_rmsnorm_matches_eager(cols, tmp_path):
+    """Mid-chain reduction and pow lowering compile and match eager, ragged rows too."""
+    model = basic.RMSNorm(cols).cuda()
+    fn, args, reference = build(model, (8, cols), tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*args), reference(*args), atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("make", "shapes"),
+    [(basic.FractionalPower, [(8, 100)]), (basic.TensorPower, [(8, 100), (8, 100)])],
+    ids=["fraction", "tensor-exponent"],
+)
+def test_libdevice_pow_matches_eager(make, shapes, tmp_path):
+    """The general pow path compiles and matches eager."""
+    fn, args, reference = build(make().cuda(), *shapes, tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*args), reference(*args), atol=1e-5, rtol=1e-5)

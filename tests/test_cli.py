@@ -97,6 +97,7 @@ def test_writes_kernel_file(runner, tmp_path):
     written = list(out.glob("cluster*.py"))
     assert written, "no kernel file written"
     assert "@triton.jit" in written[0].read_text()
+    assert "from triton.language.extra import libdevice" in written[0].read_text()  # pow needs it
 
 
 def test_renders_diff(runner, tmp_path):

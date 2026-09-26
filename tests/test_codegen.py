@@ -188,7 +188,9 @@ def test_has_lowering_matches_registry():
     from fusion_advisor.ir.op_registry import BINARY_FNS, UNARY_FNS
 
     for target in list(UNARY_FNS) + list(BINARY_FNS):
-        node = SimpleNamespace(op="call_function", target=target, args=(), kwargs={"training": False})
+        node = SimpleNamespace(
+            op="call_function", target=target, args=(None, 2), kwargs={"training": False}
+        )
         assert has_lowering(node), f"missing lowering for {target}"
 
 
@@ -316,3 +318,43 @@ def test_lower_produces_expression():
     expr = lower(node, ["v0"])
     assert "v0" in expr
     assert "tl.maximum" in expr
+
+
+@pytest.mark.parametrize(
+    ("x", "y", "expected"),
+    [
+        ("v0", "2", "(v0 * v0)"),
+        ("v0", "2.0", "(v0 * v0)"),
+        ("v0", "3", "(v0 * v0 * v0)"),
+        ("v0", "1.5", "libdevice.pow(v0.to(tl.float32), 1.5).to(v0.dtype)"),
+        ("v0", "-1", "libdevice.pow(v0.to(tl.float32), -1).to(v0.dtype)"),
+        ("v0", "v1", "libdevice.pow(v0.to(tl.float32), v1).to(v0.dtype)"),
+        ("2", "v1", "libdevice.pow(2.0, v1)"),
+    ],
+    ids=["square", "float-square", "cube", "fraction", "negative", "tensor-exp", "const-base"],
+)
+def test_pow_lowering(x, y, expected):
+    """Triton tensors have no `**`: small powers multiply, the rest go through libdevice."""
+    from fusion_advisor.codegen.lowering import pow_expr
+
+    assert pow_expr(x, y) == expected
+
+
+def test_pow_method_and_operator_lower_alike():
+    import operator
+
+    method = SimpleNamespace(op="call_method", target="pow", args=(None, 2), kwargs={})
+    op = SimpleNamespace(op="call_function", target=operator.pow, args=(None, 2), kwargs={})
+    assert lower(method, ["v0", "2"]) == lower(op, ["v0", "2"]) == "(v0 * v0)"
+
+
+def test_rmsnorm_is_one_kernel_without_pow():
+    """The whole norm, reduction included, lowers to a single kernel."""
+    gm = trace(basic.RMSNorm())
+    specs = propagate(gm, torch.randn(8, 64))
+    clusters, _ = detect(gm, specs)
+    (cluster,) = clusters
+    assert len(cluster.nodes) == 6
+    src = emit(cluster, specs).kernel_source
+    assert "**" not in src
+    assert "tl.rsqrt" in src

@@ -9,6 +9,24 @@ from ..ir.op_registry import is_training_dropout
 
 _INV_SQRT2 = "0.7071067811865476"
 
+
+def _constant(expr: str) -> float | None:
+    """Number for a literal operand like "2.0", None for a kernel variable."""
+    try:
+        return float(expr)
+    except ValueError:
+        return None
+
+
+def pow_expr(x: str, y: str) -> str:
+    """x ** y; Triton tensors have no `**`, so small integer powers become multiplies."""
+    if _constant(y) in (1, 2, 3, 4):  # exact, and fp16-safe where libdevice is not
+        return "(" + " * ".join([x] * int(_constant(y))) + ")"
+    if _constant(x) is not None:  # constant base, e.g. 2 ** v0
+        return f"libdevice.pow({_constant(x)!r}, {y})"
+    return f"libdevice.pow({x}.to(tl.float32), {y}).to({x}.dtype)"  # fp32-only overload
+
+
 # target -> fn(operand_exprs...) -> Triton expression string
 
 POINTWISE_RULES: dict[object, callable] = {
@@ -36,12 +54,12 @@ POINTWISE_RULES: dict[object, callable] = {
     operator.sub: lambda x, y: f"({x} - {y})",
     operator.mul: lambda x, y: f"({x} * {y})",
     operator.truediv: lambda x, y: f"({x} / {y})",
-    operator.pow: lambda x, y: f"({x} ** {y})",
+    operator.pow: pow_expr,
     torch.add: lambda x, y: f"({x} + {y})",
     torch.sub: lambda x, y: f"({x} - {y})",
     torch.mul: lambda x, y: f"({x} * {y})",
     torch.div: lambda x, y: f"({x} / {y})",
-    torch.pow: lambda x, y: f"({x} ** {y})",
+    torch.pow: pow_expr,
     torch.maximum: lambda x, y: f"tl.maximum({x}, {y})",
     torch.minimum: lambda x, y: f"tl.minimum({x}, {y})",
     torch.where: lambda c, x, y: f"tl.where({c}, {x}, {y})",
@@ -65,7 +83,7 @@ POINTWISE_METHOD_RULES: dict[str, callable] = {
     "sub": lambda x, y: f"({x} - {y})",
     "mul": lambda x, y: f"({x} * {y})",
     "div": lambda x, y: f"({x} / {y})",
-    "pow": lambda x, y: f"({x} ** {y})",
+    "pow": pow_expr,
     "maximum": lambda x, y: f"tl.maximum({x}, {y})",
     "minimum": lambda x, y: f"tl.minimum({x}, {y})",
     "masked_fill": lambda x, m, v: f"tl.where({m}, {v}, {x})",
