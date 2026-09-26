@@ -27,7 +27,21 @@ def pow_expr(x: str, y: str) -> str:
     return f"libdevice.pow({x}.to(tl.float32), {y}).to({x}.dtype)"  # fp32-only overload
 
 
+def _layer_norm(x, ax, weight=None, bias=None, eps="1e-05", **_) -> list[str]:
+    """Two-pass norm over the row already in registers; tail lanes must stay zero."""
+    centered, rstd = f"{x}_c", f"{x}_r"
+    out = f"{centered} * {rstd}"
+    out += f" * {weight}" if weight else ""
+    out += f" + {bias}" if bias else ""
+    return [
+        f"{centered} = tl.where(mask, {x} - tl.sum({x}, axis={ax}) / n_cols, 0.0)",
+        f"{rstd} = tl.rsqrt(tl.sum({centered} * {centered}, axis={ax}) / n_cols + {eps})",
+        f"({out})",
+    ]
+
+
 # target -> fn(operand_exprs...) -> Triton expression string
+# a rule may return statements; the last one is the node's value
 
 POINTWISE_RULES: dict[object, callable] = {
     F.relu: lambda x: f"tl.maximum({x}, 0.0)",
@@ -91,20 +105,21 @@ POINTWISE_METHOD_RULES: dict[str, callable] = {
 
 # target -> fn(operand_expr, axis_str) -> Triton expression string
 REDUCTION_RULES: dict[object, callable] = {
-    F.softmax: lambda x, ax: f"tl.softmax({x}, dim={ax})",
-    F.log_softmax: lambda x, ax: f"tl.log(tl.softmax({x}, dim={ax}))",
-    torch.sum: lambda x, ax: f"tl.sum({x}, axis={ax})",
-    torch.mean: lambda x, ax: f"(tl.sum({x}, axis={ax}) / n_cols)",
-    torch.amax: lambda x, ax: f"tl.max({x}, axis={ax})",
-    torch.amin: lambda x, ax: f"tl.min({x}, axis={ax})",
+    F.softmax: lambda x, ax, **_: f"tl.softmax({x}, dim={ax})",
+    F.log_softmax: lambda x, ax, **_: f"tl.log(tl.softmax({x}, dim={ax}))",
+    torch.sum: lambda x, ax, **_: f"tl.sum({x}, axis={ax})",
+    torch.mean: lambda x, ax, **_: f"(tl.sum({x}, axis={ax}) / n_cols)",
+    torch.amax: lambda x, ax, **_: f"tl.max({x}, axis={ax})",
+    torch.amin: lambda x, ax, **_: f"tl.min({x}, axis={ax})",
+    F.layer_norm: _layer_norm,
 }
 
 REDUCTION_METHOD_RULES: dict[str, callable] = {
-    "sum": lambda x, ax: f"tl.sum({x}, axis={ax})",
-    "mean": lambda x, ax: f"(tl.sum({x}, axis={ax}) / n_cols)",
-    "softmax": lambda x, ax: f"tl.softmax({x}, dim={ax})",
-    "amax": lambda x, ax: f"tl.max({x}, axis={ax})",
-    "amin": lambda x, ax: f"tl.min({x}, axis={ax})",
+    "sum": lambda x, ax, **_: f"tl.sum({x}, axis={ax})",
+    "mean": lambda x, ax, **_: f"(tl.sum({x}, axis={ax}) / n_cols)",
+    "softmax": lambda x, ax, **_: f"tl.softmax({x}, dim={ax})",
+    "amax": lambda x, ax, **_: f"tl.max({x}, axis={ax})",
+    "amin": lambda x, ax, **_: f"tl.min({x}, axis={ax})",
 }
 
 
@@ -113,6 +128,7 @@ _IDENTITY = {
     "sum": "0.0", "mean": "0.0",
     "amax": "-float('inf')", "softmax": "-float('inf')", "log_softmax": "-float('inf')",
     "amin": "float('inf')",
+    "layer_norm": "0.0",  # zeros keep the row sums exact
 }
 
 
@@ -138,7 +154,7 @@ def is_reduction_target(node) -> bool:
     return node.target in table
 
 
-def lower(node, operand_exprs: list[str], axis: str | None = None) -> str:
+def lower(node, operand_exprs: list[str], axis: str | None = None, **kwargs) -> str | list[str]:
     """Triton expression for one node given its operands' expressions."""
     if node.op == "call_function":
         rule = POINTWISE_RULES.get(node.target) or REDUCTION_RULES.get(node.target)
@@ -151,5 +167,5 @@ def lower(node, operand_exprs: list[str], axis: str | None = None) -> str:
         raise ValueError(f"no lowering rule for {node.target}")
 
     if is_reduction_target(node):
-        return rule(operand_exprs[0], axis or "0")
+        return rule(operand_exprs[0], axis or "0", **kwargs)
     return rule(*operand_exprs)

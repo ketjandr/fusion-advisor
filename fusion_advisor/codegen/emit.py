@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch.fx as fx
 
-from fusion_advisor.ir.op_registry import OpCategory, classify
+from fusion_advisor.ir.op_registry import OpCategory, call_kwargs, classify
 
 from ..analysis.cluster import ClusterCategory, FusableCluster
 from .lowering import lower, reduction_identity
@@ -108,12 +108,21 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
             )
             var_count += 1
 
+            # named extras like layer_norm's weight/bias/eps; the input is the guard
+            extras = {
+                k: _resolve_arg(v, node_to_var)
+                for k, v in call_kwargs(node).items()
+                if k != "input" and v is not None
+            }
             # one pid = one 1D row, so reduce along local axis 0
-            expr = lower(node, [guard], "0")
+            expr = lower(node, [guard], "0", **extras)
         else:  # normal case
             operand_exprs = [_resolve_arg(arg, node_to_var) for arg in node.args]
             expr = lower(node, operand_exprs)
 
+        if isinstance(expr, list):  # multi-statement rule: prelude, then the value
+            compute_lines.extend(expr[:-1])
+            expr = expr[-1]
         var = f"v{var_count}"
         compute_lines.append(f"{var} = {expr}")
         var_count += 1

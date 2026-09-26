@@ -88,15 +88,15 @@ class SumReduction(nn.Module):
 
 
 class ResidualReadTwice(nn.Module):
-    """A transformer residual: `h` feeds both the next norm and its own add."""
+    """A transformer residual: `h` feeds both an opaque projection and its own add."""
 
     def __init__(self, d=64):
         super().__init__()
-        self.norm = nn.LayerNorm(d)
+        self.proj = nn.Linear(d, d)
 
     def forward(self, x):
         h = x + 1.0  # stands in for the attention residual
-        return h + F.gelu(self.norm(h))
+        return h + F.gelu(self.proj(h))
 
 
 class UnlowerableOp(nn.Module):
@@ -163,6 +163,67 @@ class PassedDownBuffer(nn.Module):
 
     def forward(self, x):
         return self.inner(x, self.mask)
+
+
+class AddNorm(nn.Module):
+    """Residual add then LayerNorm - weight and bias reach layer_norm by keyword."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.norm = nn.LayerNorm(d)
+
+    def forward(self, x, residual):
+        h = x + residual
+        return self.norm(h)
+
+
+class PlainNorm(nn.Module):
+    """No affine parameters: weight and bias are None."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.norm = nn.LayerNorm(d, elementwise_affine=False)
+
+    def forward(self, x):
+        h = x * 2.0
+        return self.norm(h)
+
+
+class FunctionalNorm(nn.Module):
+    """layer_norm called with every argument positional."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.w = nn.Parameter(torch.randn(d))
+        self.b = nn.Parameter(torch.randn(d))
+
+    def forward(self, x):
+        h = x * 2.0
+        return F.layer_norm(h, (64,), self.w, self.b, 1e-6)
+
+
+class TwoDimNorm(nn.Module):
+    """Normalizes the last two dims - more than one row per program."""
+
+    def __init__(self):
+        super().__init__()
+        self.norm = nn.LayerNorm((16, 64))
+
+    def forward(self, x):
+        h = x * 2.0
+        return self.norm(h)
+
+
+class KeywordProducer(nn.Module):
+    """A pointwise result passed to layer_norm only by keyword."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.w = nn.Parameter(torch.randn(d))
+
+    def forward(self, x):
+        w = self.w * 2.0
+        return F.layer_norm(x, (64,), weight=w)
 
 
 class OpaqueBarrier(nn.Module):

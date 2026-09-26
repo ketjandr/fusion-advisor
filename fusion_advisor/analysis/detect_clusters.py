@@ -63,8 +63,8 @@ def _absorbable_neighbors(node: fx.Node, absorbable: set[fx.Node]) -> list[fx.No
     for u in node.users:
         if u in absorbable:
             neighbors.append(u)
-    for a in node.args:
-        if isinstance(a, fx.Node) and a in absorbable:
+    for a in node.all_input_nodes:  # kwargs too, e.g. layer_norm's weight
+        if a in absorbable:
             neighbors.append(a)
     return neighbors
 

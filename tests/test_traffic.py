@@ -59,3 +59,14 @@ def test_eval_dropout_moves_no_bytes():
     est = estimate(cluster, specs)
     assert est.unfused_bytes == 5 * t  # gelu r+w, add r+r+w
     assert est.fused_bytes == 3 * t  # linear and x in, add out
+
+
+def test_norm_parameters_count_as_traffic():
+    """add + layer_norm: 5 tensor passes unfused, 3 fused, plus weight and bias both ways."""
+    gm = trace(basic.AddNorm())
+    specs = propagate(gm, torch.randn(4, 16, 64), torch.randn(4, 16, 64))
+    (cluster,), _ = detect(gm, specs)
+    t, p = 4 * 16 * 64 * 4, 64 * 4  # fp32 activation, fp32 [64] parameter
+    est = estimate(cluster, specs)
+    assert est.unfused_bytes == 5 * t + 2 * p  # add r+r+w, norm r+w + weight + bias
+    assert est.fused_bytes == 3 * t + 2 * p  # x, residual, weight, bias in, norm out

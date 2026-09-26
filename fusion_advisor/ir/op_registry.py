@@ -34,7 +34,7 @@ BINARY_FNS = {
 }
 
 REDUCTION_FNS = {
-    F.softmax, F.log_softmax,
+    F.softmax, F.log_softmax, F.layer_norm,
     torch.sum, torch.mean, torch.amax, torch.amin, torch.var, torch.logsumexp,
 }
 
@@ -80,6 +80,13 @@ def reduction_axis(node, ndim: int | None = None) -> int | None:
     if classify(node) is not OpCategory.REDUCTION:
         return None
 
+    if node.target is F.layer_norm:  # normalizes the trailing len(normalized_shape) dims
+        shape = call_kwargs(node).get("normalized_shape")
+        axis = -1 if isinstance(shape, (tuple, list)) and len(shape) == 1 else None
+        if axis is None:
+            return None
+        return axis + ndim if ndim is not None else axis
+
     # get axis value from kwargs or positional args
     axis = node.kwargs.get("dim", node.kwargs.get("axis"))
     if axis is None and len(node.args) > 1:
@@ -89,6 +96,14 @@ def reduction_axis(node, ndim: int | None = None) -> int | None:
         return None  # tuple of axes not suported yet
 
     return axis + ndim if ndim is not None and axis < 0 else axis
+
+
+def call_kwargs(node) -> dict:
+    """A call's arguments by parameter name, however it was spelled; {} if unknown."""
+    if node.op != "call_function":
+        return {}
+    pair = node.normalized_arguments(None, normalize_to_only_use_kwargs=True)
+    return dict(pair.kwargs) if pair else {}
 
 
 def _dropout_training(node) -> bool:

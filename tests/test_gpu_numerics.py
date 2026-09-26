@@ -230,3 +230,18 @@ def test_libdevice_pow_matches_eager(make, shapes, tmp_path):
     """The general pow path compiles and matches eager."""
     fn, args, reference = build(make().cuda(), *shapes, tmp_path=tmp_path)
     torch.testing.assert_close(fn(*args), reference(*args), atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize("cols", [64, 100], ids=["pow2", "ragged"])
+def test_add_norm_matches_eager(cols, tmp_path):
+    """Two-pass norm with keyword weight and bias, ragged rows too."""
+    fn, args, reference = build(
+        basic.AddNorm(cols).cuda(), (8, 16, cols), (8, 16, cols), tmp_path=tmp_path
+    )
+    torch.testing.assert_close(fn(*args), reference(*args), atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize("make", [basic.PlainNorm, basic.FunctionalNorm], ids=["plain", "positional"])
+def test_norm_variants_match_eager(make, tmp_path):
+    fn, args, reference = build(make().cuda(), (8, 16, 64), tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*args), reference(*args), atol=1e-5, rtol=1e-5)

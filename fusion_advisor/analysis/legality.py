@@ -34,8 +34,8 @@ def external_inputs(cluster_nodes) -> list:
     inside = set(cluster_nodes)
     seen, out = set(), []
     for n in cluster_nodes:
-        for a in n.args:
-            if isinstance(a, fx.Node) and a not in inside and a not in seen:
+        for a in n.all_input_nodes:  # kwargs too, e.g. layer_norm's weight
+            if a not in inside and a not in seen:
                 seen.add(a)
                 out.append(a)
     return out
@@ -148,7 +148,7 @@ def check_aliasing(cluster_nodes) -> RejectionReason | None:
         # a value the cluster touches must not be mutated anywhere in the graph:
         # fx has no edge ordering a read before a later in-place write, so two
         # members reading it would see one value where eager saw two
-        for value in (n, *n.args):
-            if isinstance(value, fx.Node) and any(_mutates(u) for u in value.users):
+        for value in (n, *n.all_input_nodes):
+            if any(_mutates(u) for u in value.users):
                 return RejectionReason.ALIASING
     return None

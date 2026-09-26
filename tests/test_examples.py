@@ -29,7 +29,7 @@ def test_showcase_example_has_three_exact_clusters():
 
 
 def test_microgpt_layers_share_kernels():
-    """Two layers gave 5 clusters; twins collapse them, eval dropout leaves only attention."""
+    """Twins collapse the two layers; eval dropout leaves attention and the final norm."""
     path = Path(__file__).parents[1] / "examples" / "microgpt.py"
     gm = trace(load(str(path)).module)
     specs = propagate(gm, torch.ones(32, 256, dtype=torch.int64))
@@ -37,8 +37,9 @@ def test_microgpt_layers_share_kernels():
     clusters = merge_twins(clusters, specs)
     nodes = list(gm.graph.nodes)
 
-    (attention,) = clusters  # gelu+dropout and dropout+add have one real op each
+    attention, final_norm = sorted(clusters, key=lambda c: -c.count)
     assert attention.count == 2
+    assert [n.name for n in final_norm.nodes] == ["dropout_8", "add_4", "layer_norm_4"]
     assert [n.name for n in attention.nodes] == ["mul", "masked_fill", "softmax", "dropout_1"]
     assert resolve(attention, nodes).quality is MappingQuality.EXACT
 
@@ -54,7 +55,9 @@ def test_microgpt_attention_gets_a_diff():
     gm = trace(loaded.module)
     specs = propagate(gm, torch.ones(32, 256, dtype=torch.int64))
     clusters, _ = detect(gm, specs)
-    (attention,) = merge_twins(clusters, specs)
+    (attention,) = [c for c in merge_twins(clusters, specs) if c.count == 2]
     names = user_variable_names(list(gm.graph.nodes), loaded.source_text)
-    call = call_expression(emit(attention, specs), attention, names)
-    assert call == "cluster0(scores, self.causal_mask)"
+    kernel = emit(attention, specs)
+    attention_name = kernel.name
+    call = call_expression(kernel, attention, names)
+    assert call == f"{attention_name}(scores, self.causal_mask)"

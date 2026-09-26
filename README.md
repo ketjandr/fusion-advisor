@@ -50,14 +50,14 @@ candidates. Fusion detection finds maximal absorbable components in the FX graph
 then uses a greedy pruning heuristic to recover legal fusable subDAGs.
 
 Consider a transformer residual where `relu` feeds both `mul` and an external
-`layer_norm`:
+matmul:
 
 ```text
          x
          |
        relu ─────────┐
         |             |
-  [ mul, add ]    layer_norm   (external consumer)
+  [ mul, add ]      matmul     (opaque consumer)
 ```
 
 The component `{relu, mul, add}` fails fan-out because `relu` escapes. Rather

@@ -46,9 +46,9 @@ def estimate(cluster, specs) -> TrafficEstimate:
         if is_identity(n):  # eval dropout aliases its input, so eager moves nothing
             continue
         unfused += _node_bytes(n, specs)  # write to VRAM
-        for a in n.args:
-            if isinstance(a, fx.Node):
-                unfused += _node_bytes(a, specs)  # read from VRAM
+        operands = []
+        fx.node.map_arg((n.args, n.kwargs), operands.append)  # keeps repeats: h + h reads twice
+        unfused += sum(_node_bytes(a, specs) for a in operands)  # read from VRAM
 
     fused = sum(_node_bytes(n, specs) for n in cluster.inputs)  # read from VRAM
     fused += sum(_node_bytes(n, specs) for n in cluster.outputs)  # write to VRAM

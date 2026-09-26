@@ -358,3 +358,32 @@ def test_rmsnorm_is_one_kernel_without_pow():
     src = emit(cluster, specs).kernel_source
     assert "**" not in src
     assert "tl.rsqrt" in src
+
+
+# --- layer_norm lowering ---
+
+
+def _norm_kernel(model, *shapes):
+    gm = trace(model)
+    specs = propagate(gm, *(torch.randn(*s) for s in shapes))
+    clusters, _ = detect(gm, specs)
+    return emit(clusters[0], specs).kernel_source
+
+
+def test_layer_norm_is_two_pass_in_registers():
+    src = _norm_kernel(basic.AddNorm(), (4, 16, 64), (4, 16, 64))
+    assert "_c = tl.where(mask, " in src  # tail lanes re-zeroed after centering
+    assert "tl.rsqrt(" in src and "/ n_cols + 1e-05)" in src
+    assert "% 64" in src  # weight and bias broadcast across the row
+
+
+def test_layer_norm_without_affine_skips_weight_and_bias():
+    src = _norm_kernel(basic.PlainNorm(), (4, 16, 64))
+    last = [ln for ln in src.splitlines() if "_r)" in ln][-1]
+    assert last.strip().endswith("_c * v2_r)")
+
+
+def test_positional_layer_norm_arguments_are_read():
+    src = _norm_kernel(basic.FunctionalNorm(), (4, 16, 64))
+    assert "+ 1e-06)" in src  # eps passed positionally
+    assert src.count("% 64") == 2  # weight and bias positionally too

@@ -156,3 +156,37 @@ def test_diamond_all_three_nodes_fuse():
     assert len(rejected) == 0
     node_names = {n.name for n in clusters[0].nodes}
     assert node_names == {"relu", "mul", "add"}
+
+
+# --- layer_norm is one row reduction, fused with its producers ---
+
+
+def test_add_then_norm_is_one_cluster():
+    clusters, _ = run2(basic.AddNorm(), (4, 16, 64), (4, 16, 64))
+    (c,) = clusters
+    assert [n.name for n in c.nodes] == ["add", "layer_norm"]
+    assert c.category is ClusterCategory.REDUCTION_BOUNDARY
+
+
+def test_keyword_parameters_are_cluster_inputs():
+    """weight and bias reach layer_norm by keyword; the kernel must still load them."""
+    clusters, _ = run2(basic.AddNorm(), (4, 16, 64), (4, 16, 64))
+    assert [n.name for n in clusters[0].inputs] == ["x", "residual", "norm_weight", "norm_bias"]
+
+
+def test_keyword_producer_joins_the_cluster():
+    """A pointwise op feeding layer_norm only by keyword is still a data edge."""
+    clusters, _ = run(basic.KeywordProducer(), (4, 16, 64))
+    assert [n.name for n in clusters[0].nodes] == ["mul", "layer_norm"]
+
+
+def test_multi_dim_norm_is_rejected():
+    clusters, rejected = run(basic.TwoDimNorm(), (4, 16, 64))
+    assert clusters == []
+    assert [r.reason for r in rejected] == [RejectionReason.UNSUPPORTED_REDUCTION]
+
+
+def run2(model, *shapes):
+    gm = trace(model)
+    specs = propagate(gm, *(torch.randn(*s) for s in shapes))
+    return detect(gm, specs)
