@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
-from .provenance import MappingQuality
+from .provenance import MappingQuality, attribute_expr, owner_path
 
 
 @dataclass
@@ -41,9 +41,12 @@ def call_expression(kernel, cluster, names: dict) -> str | None:
     """Kernel call spelled in the user's own variables, or None if one is unknown."""
     args = []
     for n in cluster.inputs:
-        if n not in names:
+        name = names.get(n)
+        if name is None and n.op == "get_attr":  # exact mapping means one owning method
+            name = attribute_expr(n, owner_path(cluster.nodes[0]))
+        if name is None:
             return None  # fx names like `linear` are not in scope in the user's code
-        args.append(names[n])
+        args.append(name)
     return f"{kernel.name}({', '.join(args)})"
 
 

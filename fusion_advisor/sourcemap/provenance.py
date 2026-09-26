@@ -79,6 +79,17 @@ def owner_path(node) -> str:
     return owners[-1] if owners else ""
 
 
+def attribute_expr(node, owner: str) -> str | None:
+    """`self.<path>` for a parameter or buffer read inside `owner`, else None."""
+    if node.op != "get_attr":
+        return None
+    prefix = f"{owner}." if owner else ""
+    if not node.target.startswith(prefix):
+        return None  # read in an outer module and passed down under a local name
+    parts = node.target[len(prefix):].split(".")
+    return "self" + "".join(f"[{p}]" if p.isdigit() else f".{p}" for p in parts)
+
+
 def _frames(nodes) -> dict:
     """node -> Frame, skipping nodes with no user frame."""
     out = {}

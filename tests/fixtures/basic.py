@@ -148,6 +148,23 @@ class TensorPower(nn.Module):
         return h * 2.0
 
 
+class PassedDownBuffer(nn.Module):
+    """Buffer read in the outer forward, used under a local name in the inner one."""
+
+    class Inner(nn.Module):
+        def forward(self, x, mask):
+            h = x * 2.0
+            return h.masked_fill(mask, 0.0)
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.inner = self.Inner()
+        self.register_buffer("mask", torch.zeros(d, dtype=torch.bool))
+
+    def forward(self, x):
+        return self.inner(x, self.mask)
+
+
 class OpaqueBarrier(nn.Module):
     """matmul between two chains - must yield TWO clusters."""
 

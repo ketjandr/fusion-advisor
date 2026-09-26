@@ -3,6 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from fusion_advisor.analysis.detect_clusters import detect
@@ -138,3 +139,49 @@ def test_non_exact_never_builds_a_diff():
     for quality in (MappingQuality.APPROXIMATE, MappingQuality.UNAVAILABLE):
         sr = SimpleNamespace(quality=quality, file="f.py", start_line=1, end_line=2)
         assert build(sr, SimpleNamespace(call_expr="k(x)"), "a\nb\nc\n") is None
+
+
+# --- parameters and buffers are named as self.<attr> in the kernel call ---
+
+
+def _call(model, shape):
+    from fusion_advisor.sourcemap.diff import call_expression
+    from fusion_advisor.sourcemap.provenance import user_variable_names
+
+    clusters, specs, all_nodes = pipeline(model, shape)
+    (cluster,) = clusters
+    kernel = emit(cluster, specs)
+    return call_expression(kernel, cluster, user_variable_names(all_nodes, FIXTURE_SRC))
+
+
+def test_parameter_input_is_named_via_self():
+    assert _call(basic.RMSNorm(), (8, 64)) == "cluster0(x, self.weight)"
+
+
+def test_parameter_input_gets_a_diff():
+    clusters, specs, all_nodes = pipeline(basic.RMSNorm(), (8, 64))
+    call = _call(basic.RMSNorm(), (8, 64))
+    d = build(resolve(clusters[0], all_nodes), emit(clusters[0], specs), FIXTURE_SRC, call)
+    assert d.added == ["        return cluster0(x, self.weight)"]
+
+
+def test_attribute_read_in_an_outer_module_is_not_named():
+    """Inside Inner.forward the buffer is the local `mask`; `self.mask` would not exist."""
+    assert _call(basic.PassedDownBuffer(), (4, 64)) is None
+
+
+@pytest.mark.parametrize(
+    ("target", "owner", "expected"),
+    [
+        ("weight", "", "self.weight"),
+        ("blocks.0.attn.causal_mask", "blocks.0.attn", "self.causal_mask"),
+        ("blocks.0.mlp.up.weight", "blocks.0.mlp", "self.up.weight"),
+        ("layers.2.scale", "", "self.layers[2].scale"),
+        ("mask", "inner", None),
+    ],
+    ids=["top-level", "nested", "child-module", "indexed", "outer-module"],
+)
+def test_attribute_expr(target, owner, expected):
+    from fusion_advisor.sourcemap.provenance import attribute_expr
+
+    assert attribute_expr(SimpleNamespace(op="get_attr", target=target), owner) == expected

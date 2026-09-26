@@ -135,6 +135,7 @@ def test_call_expression_declines_unknown_name():
 
     class FakeNode:  # hashable, like a real fx.Node
         name = "linear"
+        op = "call_function"
 
     kernel = SimpleNamespace(name="cluster0")
     cluster = SimpleNamespace(inputs=[FakeNode()])
