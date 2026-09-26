@@ -84,44 +84,82 @@ def _find_component(seed: fx.Node, absorbable: set[fx.Node], visited: set[fx.Nod
     return component
 
 
-def detect(gm, specs) -> tuple[list[FusableCluster], list[RejectedCandidate]]:
-    """Find fusable clusters via connected components of absorbable nodes."""
-    topo_index = {n: i for i, n in enumerate(gm.graph.nodes)}
+def _is_pointwise(n: fx.Node, absorbable: set[fx.Node]) -> bool:
+    return n in absorbable and classify(n) is not OpCategory.REDUCTION
 
+
+def _grow_around(anchor: fx.Node, absorbable, claimed) -> list[fx.Node]:
+    """Pull in producers only the group consumes and consumers only the group feeds."""
+    group, work = {anchor}, [anchor]
+
+    def free(n):
+        return _is_pointwise(n, absorbable) and n not in claimed and n not in group
+
+    while work:
+        n = work.pop()
+        # a producer joins once its last user has (checked again as each user joins)
+        joins = [p for p in n.all_input_nodes if free(p) and all(u in group for u in p.users)]
+        if len(n.users) == 1 and free(next(iter(n.users))):
+            joins.append(next(iter(n.users)))
+        for m in joins:
+            if m not in group:
+                group.add(m)
+                work.append(m)
+    return list(group)
+
+
+def _legal_or_shrunk(candidate, specs):
+    """Candidate after legality, retrying on the part that can still fuse."""
+    reason = _first_failure(candidate, specs)
+    while reason is not None:
+        smaller = _without_extra_escapes(candidate)
+        if smaller is None or len(smaller) < 2 or len(smaller) == len(candidate):
+            break
+        candidate, reason = smaller, _first_failure(smaller, specs)
+    return candidate, reason
+
+
+def detect(gm, specs) -> tuple[list[FusableCluster], list[RejectedCandidate]]:
+    """Anchor a cluster on each reduction, then group leftover pointwise ops by connectivity."""
+    topo_index = {n: i for i, n in enumerate(gm.graph.nodes)}
     absorbable: set[fx.Node] = {n for n in gm.graph.nodes if _can_absorb(classify(n))}
 
-    clusters: list[FusableCluster] = []
+    found: list[list[fx.Node]] = []
     rejected: list[RejectedCandidate] = []
-    visited: set[fx.Node] = set()
+    claimed: set[fx.Node] = set()
 
+    def consider(candidate):
+        candidate = sorted(candidate, key=topo_index.__getitem__)
+        if _real_ops(candidate) < 2:
+            return
+        candidate, reason = _legal_or_shrunk(candidate, specs)
+        if reason is not None:
+            rejected.append(RejectedCandidate(nodes=candidate, reason=reason))
+        elif _real_ops(candidate) >= 2:  # shrinking may leave a single real op
+            found.append(candidate)
+            claimed.update(candidate)
+
+    # one reduction per kernel, so each reduction seeds its own cluster
     for node in gm.graph.nodes:
-        if node not in absorbable or node in visited:
-            continue
+        if node in absorbable and classify(node) is OpCategory.REDUCTION:
+            consider(_grow_around(node, absorbable, claimed))
 
-        component = _find_component(node, absorbable, visited)
-        component.sort(key=lambda n: topo_index[n])
+    # leftover pointwise ops fuse with whatever they touch
+    leftover = {n for n in absorbable if _is_pointwise(n, absorbable) and n not in claimed}
+    visited: set[fx.Node] = set()
+    for node in gm.graph.nodes:
+        if node in leftover and node not in visited:
+            consider(_find_component(node, leftover, visited))
 
-        if _real_ops(component) < 2:
-            continue
-
-        reason = _first_failure(component, specs)
-        while reason is not None:  # retry on the part that can still fuse
-            smaller = _without_extra_escapes(component)
-            if smaller is None or len(smaller) < 2 or len(smaller) == len(component):
-                break
-            component, reason = smaller, _first_failure(smaller, specs)
-
-        if reason is None and _real_ops(component) < 2:
-            continue  # shrinking left a single real op, nothing to fuse
-        if reason is None:
-            clusters.append(FusableCluster(
-                index=len(clusters),
-                category=_category_for(component),
-                nodes=component,
-                inputs=external_inputs(component),
-                outputs=escaping_nodes(component),
-            ))
-        else:
-            rejected.append(RejectedCandidate(nodes=component, reason=reason))
-
+    found.sort(key=lambda c: topo_index[c[0]])  # report in source order
+    clusters = [
+        FusableCluster(
+            index=i,
+            category=_category_for(c),
+            nodes=c,
+            inputs=external_inputs(c),
+            outputs=escaping_nodes(c),
+        )
+        for i, c in enumerate(found)
+    ]
     return clusters, rejected

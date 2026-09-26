@@ -387,3 +387,13 @@ def test_positional_layer_norm_arguments_are_read():
     src = _norm_kernel(basic.FunctionalNorm(), (4, 16, 64))
     assert "+ 1e-06)" in src  # eps passed positionally
     assert src.count("% 64") == 2  # weight and bias positionally too
+
+
+def test_per_row_input_is_loaded_as_a_scalar():
+    """Loading it per lane made the collapsed result a block, which a row store rejects."""
+    gm = trace(basic.RowStat())
+    specs = propagate(gm, torch.randn(8, 16))
+    clusters, _ = detect(gm, specs)
+    src = emit(clusters[0], specs).kernel_source
+    assert "tl.load(in_ptr1 + row)" in src
+    assert "tl.store(out_ptr0 + row," in src

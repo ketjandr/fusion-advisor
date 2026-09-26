@@ -245,3 +245,13 @@ def test_add_norm_matches_eager(cols, tmp_path):
 def test_norm_variants_match_eager(make, tmp_path):
     fn, args, reference = build(make().cuda(), (8, 16, 64), tmp_path=tmp_path)
     torch.testing.assert_close(fn(*args), reference(*args), atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("make", "shapes"),
+    [(basic.RowStat, [(8, 100)]), (basic.SoftmaxChain, [(8, 100)]), (basic.NormSandwich, [(4, 16, 64)])],
+    ids=["row-stat", "softmax-chain", "norm-sandwich"],
+)
+def test_anchored_clusters_match_eager(make, shapes, tmp_path):
+    fn, args, reference = build(make().cuda(), *shapes, tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*args), reference(*args), atol=1e-5, rtol=1e-5)

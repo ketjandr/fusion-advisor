@@ -89,8 +89,12 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
         var = f"v{var_count}"
         in_ptrs.append(ptr)
         node_to_var[inp] = var
-        index = broadcast_index(specs[inp.name].dims, block_dims, flat)
-        load_lines.append(f"{var} = tl.load({ptr} + ({index}), mask=mask)")
+        in_dims = specs[inp.name].dims
+        if reducing and in_dims != block_dims and in_dims == (*block_dims[:-1], 1):
+            load_lines.append(f"{var} = tl.load({ptr} + row)")  # one value per row, a scalar
+        else:
+            index = broadcast_index(in_dims, block_dims, flat)
+            load_lines.append(f"{var} = tl.load({ptr} + ({index}), mask=mask)")
         var_count += 1
 
     # walk cluster nodes in order, resolve args, lower

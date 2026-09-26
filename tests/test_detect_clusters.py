@@ -190,3 +190,24 @@ def run2(model, *shapes):
     gm = trace(model)
     specs = propagate(gm, *(torch.randn(*s) for s in shapes))
     return detect(gm, specs)
+
+
+# --- each reduction anchors its own cluster ---
+
+
+def test_chained_reductions_split_instead_of_rejecting():
+    """One component, two softmaxes: used to be rejected whole as multi-reduction."""
+    clusters, rejected = run(basic.SoftmaxChain(), (8, 64))
+    assert [[n.name for n in c.nodes] for c in clusters] == [["mul", "softmax", "add"]]
+    assert rejected == []
+
+
+def test_pointwise_between_norms_joins_one_side_only():
+    clusters, _ = run(basic.NormSandwich(), (4, 16, 64))
+    assert [[n.name for n in c.nodes] for c in clusters] == [["mul", "layer_norm", "gelu"]]
+
+
+def test_shared_producer_is_not_pulled_into_an_anchor():
+    """mul feeds two reductions, so neither anchor may own it."""
+    clusters, _ = run(basic.RowStat(), (8, 16))
+    assert all("mul" not in [n.name for n in c.nodes] for c in clusters)

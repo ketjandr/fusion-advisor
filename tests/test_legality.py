@@ -136,8 +136,17 @@ def test_reduction_over_a_non_last_axis_is_rejected():
 
 def test_two_reductions_in_one_cluster_is_rejected():
     """mean+var in one pass needs Welford, v2."""
-    _, rej = reasons(TwoReductions(), (8, 16))
-    assert RejectionReason.UNSUPPORTED_REDUCTION in rej
+    c = cluster(TwoReductions(), "mul", "sum_1", "mean", "add")
+    gm = trace(TwoReductions())
+    specs = propagate(gm, torch.randn(8, 16))
+    assert check_reduction(c, specs) is RejectionReason.UNSUPPORTED_REDUCTION
+
+
+def test_detection_splits_two_reductions_instead_of_rejecting():
+    """Each reduction anchors its own group, so the pair never meets legality."""
+    clusters, rej = reasons(TwoReductions(), (8, 16))
+    assert RejectionReason.UNSUPPORTED_REDUCTION not in rej
+    assert [names(c.nodes) for c in clusters] == [["sum_1", "add"]]
 
 
 def test_unlowerable_op_is_rejected_not_crashed():

@@ -45,9 +45,10 @@ and records stack traces for the final source diff.
 
 ### Detection
 
-Connected components of absorbable (pointwise + reduction) nodes form
-candidates. Fusion detection finds maximal absorbable components in the FX graph,
-then uses a greedy pruning heuristic to recover legal fusable subDAGs.
+Each reduction anchors one candidate: it pulls in producers that only it consumes
+and consumers that only it feeds, so two reductions never compete for one kernel.
+Leftover pointwise ops form connected components, and a greedy pruning heuristic
+recovers legal fusable subDAGs from components that fail legality.
 
 Consider a transformer residual where `relu` feeds both `mul` and an external
 matmul:

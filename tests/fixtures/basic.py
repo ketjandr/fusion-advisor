@@ -226,6 +226,35 @@ class KeywordProducer(nn.Module):
         return F.layer_norm(x, (64,), weight=w)
 
 
+class SoftmaxChain(nn.Module):
+    """Two reductions joined by a pointwise op - one connected component, two kernels."""
+
+    def forward(self, x):
+        a = F.softmax(x * 2.0, dim=-1)
+        return F.softmax(a + 1.0, dim=-1)
+
+
+class NormSandwich(nn.Module):
+    """norm -> gelu -> norm: the gelu can join only one of them."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.n1 = nn.LayerNorm(d)
+        self.n2 = nn.LayerNorm(d)
+
+    def forward(self, x):
+        h = self.n1(x * 2.0)
+        return self.n2(F.gelu(h))
+
+
+class RowStat(nn.Module):
+    """A per-row value added after a reduction - loaded once per row, not per lane."""
+
+    def forward(self, x):
+        h = x * 0.5
+        return h.sum(-1, keepdim=True) + h.mean(-1, keepdim=True)
+
+
 class OpaqueBarrier(nn.Module):
     """matmul between two chains - must yield TWO clusters."""
 
