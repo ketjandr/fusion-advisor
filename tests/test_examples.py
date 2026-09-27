@@ -67,3 +67,56 @@ def test_microgpt_attention_gets_a_diff():
     attention_name = kernel.name
     call = call_expression(kernel, attention, names)
     assert call == f"{attention_name}(scores, self.causal_mask)"
+
+
+def test_microgpt_residual_norm_gets_a_diff():
+    from fusion_advisor.codegen.emit import emit
+    from fusion_advisor.sourcemap.bindings import bind
+    from fusion_advisor.sourcemap.diff import build_bound
+
+    path = Path(__file__).parents[1] / "examples" / "microgpt.py"
+    loaded = load(str(path))
+    gm = trace(loaded.module)
+    specs = propagate(gm, torch.ones(32, 256, dtype=torch.int64))
+    clusters, _ = detect(gm, specs)
+    clusters = merge_twins(clusters, specs)
+    nodes = list(gm.graph.nodes)
+    c = clusters[2]
+    rng = resolve(c, nodes)
+    diff = build_bound(rng, emit(c, specs), loaded.source_text, bind(c, rng, nodes, loaded.source_text))
+    assert diff.added == ["            residual, x = cluster2(x, residual, self.ln_2.weight, self.ln_2.bias)"]
+
+
+def test_microgpt_rewrite_computes_the_same():
+    """Apply every diff, run eager stand-ins for the kernels, compare with the original."""
+    from fusion_advisor.codegen.emit import emit
+    from fusion_advisor.sourcemap.apply import apply_diffs
+    from fusion_advisor.sourcemap.bindings import bind
+    from fusion_advisor.sourcemap.diff import build_bound
+    from fusion_advisor.validate.harness import extract_subgraph
+
+    path = Path(__file__).parents[1] / "examples" / "microgpt.py"
+    loaded = load(str(path))
+    gm = trace(loaded.module)
+    tokens = torch.randint(0, 256, (2, 256))
+    specs = propagate(gm, tokens)
+    clusters = merge_twins(detect(gm, specs)[0], specs)
+    nodes = list(gm.graph.nodes)
+
+    diffs, stand_ins = [], {}
+    for c in clusters:
+        rng = resolve(c, nodes)
+        binding = bind(c, rng, nodes, loaded.source_text) if rng.quality is MappingQuality.EXACT else None
+        if binding:
+            kernel = emit(c, specs)
+            diffs.append(build_bound(rng, kernel, loaded.source_text, binding))
+            stand_ins[kernel.name] = extract_subgraph(gm, c)
+    assert len(diffs) == 2  # attention and the residual norm
+
+    namespace = {"__name__": "rewritten", **stand_ins}
+    source = apply_diffs(loaded.source_text, diffs)
+    exec(compile(source, str(path), "exec"), namespace)  # noqa: S102 - our own rewritten example
+    rewritten = namespace["MicroGPT"]().eval()
+    rewritten.load_state_dict(loaded.module.state_dict())
+    with torch.no_grad():
+        torch.testing.assert_close(rewritten(tokens), loaded.module(tokens))

@@ -280,6 +280,55 @@ class PreNormResidual(nn.Module):
         return self.proj(self.norm(h)) + h
 
 
+class ResidualBlock(nn.Module):
+    """The add's result is copied to `residual`, then `x` is reused for the norm."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.norm = nn.LayerNorm(d)
+        self.proj = nn.Linear(d, d)
+
+    def forward(self, x, residual):
+        x = x + residual
+        residual = x
+        x = self.norm(x)
+        x = self.proj(x)
+        return x + residual
+
+
+class AliasedOutput(nn.Module):
+    """An output bound to two names inside the replaced lines."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.proj = nn.Linear(d, d)
+
+    def forward(self, x):
+        h = x * 2.0
+        g = h
+        y = F.relu(h)
+        return self.proj(y) + self.proj(g)
+
+
+class BranchBeforeCluster(nn.Module):
+    """Control flow the assignment replay does not follow."""
+
+    def forward(self, x):
+        if self.training:
+            x = x * 1.0
+        h = x * 2.0
+        return F.relu(h)
+
+
+class ConstantInRange(nn.Module):
+    """A plain Python value bound inside the replaced lines."""
+
+    def forward(self, x):
+        h = x * 2.0
+        scale = 0.5
+        return F.relu(h) * scale
+
+
 class OpaqueBarrier(nn.Module):
     """matmul between two chains - must yield TWO clusters."""
 

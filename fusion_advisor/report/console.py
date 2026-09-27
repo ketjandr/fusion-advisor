@@ -173,9 +173,9 @@ def render_unmapped(cluster, rng) -> None:
 
 
 def render_multi_output(cluster, rng) -> None:
-    """Multi-output clusters are measured but not rewritten yet."""
+    """An exact multi-output cluster whose outputs could not all be named."""
     console.print(
-        f"\ncluster {cluster.index} ({_where(rng)}): no diff yet - "
-        f"it has {len(cluster.outputs)} outputs.",
+        f"\ncluster {cluster.index} ({_where(rng)}): no safe diff - could not name all "
+        f"{len(cluster.outputs)} outputs in your source.",
         style="dim",
     )

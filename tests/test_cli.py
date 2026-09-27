@@ -409,4 +409,4 @@ class Net(nn.Module):
 def test_multi_output_cluster_says_why_it_has_no_diff(runner, tmp_path):
     r = run(runner, tmp_path, MULTI, "--input-shape", "4,64", "--out-dir", str(tmp_path))
     assert r.exit_code == 0, r.output
-    assert "no diff yet - it has 2 outputs" in r.output
+    assert "could not name all 2 outputs" in r.output

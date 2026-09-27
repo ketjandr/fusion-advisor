@@ -15,8 +15,9 @@ from .loader import LoadError, build_example_input, load, parse_dtype, parse_sha
 from .report import console as report
 from .report.json_out import build_payload
 from .sourcemap.apply import ApplyError, apply_diffs
+from .sourcemap.bindings import bind
 from .sourcemap.diff import build as build_diff
-from .sourcemap.diff import call_expression
+from .sourcemap.diff import build_bound, call_expression
 from .sourcemap.provenance import MappingQuality, resolve, user_variable_names
 from .validate.bench import gpu_available, validate
 
@@ -198,19 +199,24 @@ def main(
             if not apply_edits:
                 report.console.print(f"\nwrote [bold]{_write_kernel(out_path, kernels[i])}[/bold]")
             call = call_expression(kernels[i], c, var_names)
-            if len(c.outputs) > 1:  # the replacement would have to bind several variables
+            exact = rng.quality is MappingQuality.EXACT
+            binding = bind(c, rng, all_nodes, loaded.source_text) if exact else None
+            if binding:  # replayed the method's assignments, so every output is named
+                diffs[i] = build_bound(rng, kernels[i], loaded.source_text, binding)
+                report.render_diff(diffs[i])
+            elif not exact:
+                report.render_unmapped(c, rng)
+            elif len(c.outputs) > 1:  # replay failed, so some output has no name
                 report.render_multi_output(c, rng)
-            elif rng.quality is MappingQuality.EXACT and call:
+            elif call:
                 diffs[i] = build_diff(rng, kernels[i], loaded.source_text, call)
                 report.render_diff(diffs[i])
-            elif rng.quality is MappingQuality.EXACT:
+            else:
                 report.console.print(
                     f"\ncluster {c.index}: no safe diff - an input has no named variable "
                     f"in your source.",
                     style="dim",
                 )
-            else:
-                report.render_unmapped(c, rng)
 
         if apply_edits:
             _apply_edits(loaded, kernels, diffs)

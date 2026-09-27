@@ -70,3 +70,21 @@ def build(source_range, kernel, source_text: str, call_expr: str | None = None) 
         removed=removed,
         added=[_replacement(removed[-1], call_expr)],
     )
+
+
+def build_bound(source_range, kernel, source_text: str, binding) -> ClusterDiff | None:
+    """Replace the range with one call that rebinds every output the code still reads."""
+    if source_range.quality is not MappingQuality.EXACT:
+        return None
+    lines = source_text.splitlines()
+    start, end = source_range.start_line, source_range.end_line
+    if not (1 <= start <= end <= len(lines)):
+        return None
+
+    removed = lines[start - 1 : end]
+    indent = _indent_of(removed[0])
+    call = f"{kernel.name}({', '.join(binding.args)})"
+    head = f"{', '.join(binding.targets)} = " if binding.targets else "return "
+    added = [f"{indent}{head}{call}"]
+    added += [f"{indent}{alias} = {target}" for alias, target in binding.aliases]
+    return ClusterDiff(source_range.file, start, end, removed, added)
