@@ -41,10 +41,15 @@ def test_opaque_consumer_is_excluded_not_fused():
     assert fused == {"mul", "add"}
 
 
-def test_escaping_output_blocks_fusion():
-    _, rejected = run(basic.EscapingOutput(), (4, 64))
-    reasons = [r.reason for r in rejected]
-    assert RejectionReason.FAN_OUT in reasons
+def test_returned_intermediate_becomes_a_second_output():
+    clusters, _ = run(basic.EscapingOutput(), (4, 64))
+    (c,) = clusters
+    assert [n.name for n in c.outputs] == ["relu", "mul"]
+
+
+def test_broadcast_shaped_escape_is_rejected():
+    _, rejected = run(basic.EscapingBias(), (4, 64))
+    assert [r.reason for r in rejected] == [RejectionReason.UNSTORABLE_OUTPUT]
 
 
 def test_repeated_operand_is_legal():
@@ -115,7 +120,7 @@ def test_mutation_rejected():
     """add_ is OPAQUE, so the component splits. Whichever check fires first is fine."""
     _, rejected = run(basic.MutationAfterRead(), (4, 64))
     reasons = [r.reason for r in rejected]
-    assert any(r in reasons for r in (RejectionReason.FAN_OUT, RejectionReason.ALIASING))
+    assert any(r in reasons for r in (RejectionReason.UNSTORABLE_OUTPUT, RejectionReason.ALIASING))
 
 
 def test_module_style_forms_cluster():
@@ -207,7 +212,10 @@ def test_pointwise_between_norms_joins_one_side_only():
     assert [[n.name for n in c.nodes] for c in clusters] == [["mul", "layer_norm", "gelu"]]
 
 
-def test_shared_producer_is_not_pulled_into_an_anchor():
-    """mul feeds two reductions, so neither anchor may own it."""
+def test_shared_producer_rides_along_as_an_output():
+    """mul feeds two reductions; sum's claim would be non-convex, so mean takes it."""
     clusters, _ = run(basic.RowStat(), (8, 16))
-    assert all("mul" not in [n.name for n in c.nodes] for c in clusters)
+    mean_cluster, sum_cluster = clusters
+    assert [n.name for n in mean_cluster.nodes] == ["mul", "mean"]
+    assert [n.name for n in mean_cluster.outputs] == ["mul", "mean"]
+    assert [n.name for n in sum_cluster.nodes] == ["sum_1", "add"]

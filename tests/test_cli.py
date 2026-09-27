@@ -393,3 +393,20 @@ def test_totals_count_every_instance(runner, tmp_path):
     t = cluster["traffic"]
     saved = human_bytes(2 * (t["unfused_bytes"] - t["fused_bytes"]))
     assert f"{saved} of {human_bytes(2 * t['unfused_bytes'])}" in r.output
+
+
+MULTI = """
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Net(nn.Module):
+    def forward(self, x):
+        h = F.relu(x)
+        return h * 2.0, h
+"""
+
+
+def test_multi_output_cluster_says_why_it_has_no_diff(runner, tmp_path):
+    r = run(runner, tmp_path, MULTI, "--input-shape", "4,64", "--out-dir", str(tmp_path))
+    assert r.exit_code == 0, r.output
+    assert "no diff yet - it has 2 outputs" in r.output

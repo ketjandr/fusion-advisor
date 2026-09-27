@@ -29,7 +29,7 @@ def test_showcase_example_has_three_exact_clusters():
 
 
 def test_microgpt_layers_share_kernels():
-    """Twins collapse the two layers; eval dropout leaves attention and the final norm."""
+    """Attention plus every residual-add + norm site; the residual is a second output."""
     path = Path(__file__).parents[1] / "examples" / "microgpt.py"
     gm = trace(load(str(path)).module)
     specs = propagate(gm, torch.ones(32, 256, dtype=torch.int64))
@@ -37,11 +37,15 @@ def test_microgpt_layers_share_kernels():
     clusters = merge_twins(clusters, specs)
     nodes = list(gm.graph.nodes)
 
-    attention, final_norm = sorted(clusters, key=lambda c: -c.count)
-    assert attention.count == 2
-    assert [n.name for n in final_norm.nodes] == ["dropout_8", "add_4", "layer_norm_4"]
-    assert [n.name for n in attention.nodes] == ["mul", "masked_fill", "softmax", "dropout_1"]
-    assert resolve(attention, nodes).quality is MappingQuality.EXACT
+    rows = [([n.name for n in c.nodes], c.count, len(c.outputs)) for c in clusters]
+    assert rows == [
+        (["add", "dropout", "layer_norm"], 1, 2),
+        (["mul", "masked_fill", "softmax", "dropout_1"], 2, 1),
+        (["dropout_2", "add_1", "layer_norm_1"], 2, 2),
+        (["dropout_4", "add_2", "layer_norm_2"], 1, 2),
+        (["dropout_8", "add_4", "layer_norm_4"], 1, 1),
+    ]
+    assert resolve(clusters[1], nodes).quality is MappingQuality.EXACT
 
 
 def test_microgpt_attention_gets_a_diff():
@@ -55,7 +59,9 @@ def test_microgpt_attention_gets_a_diff():
     gm = trace(loaded.module)
     specs = propagate(gm, torch.ones(32, 256, dtype=torch.int64))
     clusters, _ = detect(gm, specs)
-    (attention,) = [c for c in merge_twins(clusters, specs) if c.count == 2]
+    (attention,) = [
+        c for c in merge_twins(clusters, specs) if "softmax" in [n.name for n in c.nodes]
+    ]
     names = user_variable_names(list(gm.graph.nodes), loaded.source_text)
     kernel = emit(attention, specs)
     attention_name = kernel.name

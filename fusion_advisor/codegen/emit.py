@@ -132,19 +132,28 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
         var_count += 1
         node_to_var[node] = var  # add this so downstream nodes can use the expr node
 
-    # tl.store lines (one per escaping node)
-    out_dims = specs[escaping[0].name].dims
-    collapsed = reducing and out_dims != block_dims  # e.g. sum(-1): one value per row
+    # assemble wrapper inputs; not in0 blindly, it may be the [D] bias
+    in_args = [f"in{i}" for i in range(len(in_ptrs))]
+    args = ", ".join(in_args)
+    like = in_args[next((i for i, n in enumerate(inputs) if specs[n.name].dims == block_dims), 0)]
+
+    # one store and one allocation per value needed outside the cluster
     store_lines: list[str] = []
     out_ptrs: list[str] = []
+    allocs: list[str] = []
     for i, esc in enumerate(escaping):
-        ptr = f"out_ptr{i}"
+        ptr, spec = f"out_ptr{i}", specs[esc.name]
         out_ptrs.append(ptr)
+        per_row = reducing and spec.dims != block_dims  # e.g. sum(-1): one value per row
         store_lines.append(
             f"tl.store({ptr} + row, {node_to_var[esc]})"
-            if collapsed
+            if per_row
             else f"tl.store({ptr} + ({flat}), {node_to_var[esc]}, mask=mask)"
         )
+        allocs.append(
+            f"        out{i} = torch.empty({spec.dims}, dtype={spec.dtype}, device={like}.device)"
+        )
+    outs = ", ".join(f"out{i}" for i in range(len(escaping)))
 
     # assemble kernel
     params = ", ".join(in_ptrs + out_ptrs)
@@ -152,29 +161,18 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
     skeleton = REDUCTION_SKELETON if cluster.category is ClusterCategory.REDUCTION_BOUNDARY else ELEMENTWISE_SKELETON
     kernel_src = skeleton.format(name=name, params=params, body=body)
 
-    # assemble wrapper
-    in_args = [f"in{i}" for i in range(len(in_ptrs))]
-    args = ", ".join(in_args)
-    # not in0 blindly, it may be the [D] bias
-    like = in_args[next((i for i, n in enumerate(inputs) if specs[n.name].dims == block_dims), 0)]
-
     if reducing:
         n_cols = block_dims[-1]
         n_rows = math.prod(block_dims) // n_cols
         block = 1 << (n_cols - 1).bit_length()  # tl.arange needs a power of two
-        alloc = (
-            f"torch.empty({out_dims}, dtype={like}.dtype, device={like}.device)"
-            if collapsed
-            else f"torch.empty_like({like})"
-        )
-        call = f"{name}_kernel[({n_rows},)]({args}, out0, {n_rows}, {n_cols}, BLOCK_SIZE={block})"
-        launch = [f"        out0 = {alloc}", f"        {call}"]
+        call = f"{name}_kernel[({n_rows},)]({args}, {outs}, {n_rows}, {n_cols}, BLOCK_SIZE={block})"
+        launch = [*allocs, f"        {call}"]
     else:
         launch = [
-            f"        out0 = torch.empty_like({like})",
-            f"        n = {like}.numel()",
+            *allocs,
+            f"        n = {math.prod(block_dims)}",  # static shapes; no input may span the block
             "        grid = lambda meta: (triton.cdiv(n, meta['BLOCK_SIZE']),)",
-            f"        {name}_kernel[grid]({args}, out0, n, BLOCK_SIZE=1024)",
+            f"        {name}_kernel[grid]({args}, {outs}, n, BLOCK_SIZE=1024)",
         ]
 
     wrapper_lines = [
@@ -183,7 +181,7 @@ def emit(cluster: FusableCluster, specs: dict) -> GeneratedKernel:
         f"    def forward(ctx, {args}):",
         *launch,
         f"        ctx.save_for_backward({args})  # what a backward kernel will need",
-        "        return out0",
+        f"        return {outs}",
         "",
         "    @staticmethod",
         "    def backward(ctx, grad_out):",

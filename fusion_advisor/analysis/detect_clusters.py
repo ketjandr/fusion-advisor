@@ -9,8 +9,8 @@ from .cluster import ClusterCategory, FusableCluster, RejectedCandidate
 from .legality import (
     check_aliasing,
     check_convexity,
-    check_fan_out,
     check_lowering,
+    check_outputs,
     check_reduction,
     check_shapes,
     escaping_nodes,
@@ -29,11 +29,11 @@ def _category_for(candidate: list[fx.Node]) -> ClusterCategory:
 def _first_failure(candidate: list[fx.Node], specs):
     """Run all legality checks; return the first rejection or None."""
     return (
-        check_fan_out(candidate)
-        or check_convexity(candidate)
+        check_convexity(candidate)
         or check_shapes(candidate, specs)
         or check_aliasing(candidate)
         or check_reduction(candidate, specs)
+        or check_outputs(candidate, specs)  # needs a sane block shape, so after those
         or check_lowering(candidate)
     )
 
@@ -88,8 +88,8 @@ def _is_pointwise(n: fx.Node, absorbable: set[fx.Node]) -> bool:
     return n in absorbable and classify(n) is not OpCategory.REDUCTION
 
 
-def _grow_around(anchor: fx.Node, absorbable, claimed) -> list[fx.Node]:
-    """Pull in producers only the group consumes and consumers only the group feeds."""
+def _grow_around(anchor: fx.Node, absorbable, claimed, share: bool) -> list[fx.Node]:
+    """Pull in producers (shared ones too if `share`, as extra outputs) and sole consumers."""
     group, work = {anchor}, [anchor]
 
     def free(n):
@@ -98,7 +98,10 @@ def _grow_around(anchor: fx.Node, absorbable, claimed) -> list[fx.Node]:
     while work:
         n = work.pop()
         # a producer joins once its last user has (checked again as each user joins)
-        joins = [p for p in n.all_input_nodes if free(p) and all(u in group for u in p.users)]
+        joins = [
+            p for p in n.all_input_nodes
+            if free(p) and (share or all(u in group for u in p.users))
+        ]
         if len(n.users) == 1 and free(next(iter(n.users))):
             joins.append(next(iter(n.users)))
         for m in joins:
@@ -141,8 +144,16 @@ def detect(gm, specs) -> tuple[list[FusableCluster], list[RejectedCandidate]]:
 
     # one reduction per kernel, so each reduction seeds its own cluster
     for node in gm.graph.nodes:
-        if node in absorbable and classify(node) is OpCategory.REDUCTION:
-            consider(_grow_around(node, absorbable, claimed))
+        if node not in absorbable or classify(node) is not OpCategory.REDUCTION:
+            continue
+        # a shared producer rides along as a second output: pay its write, save the re-read
+        shared = sorted(_grow_around(node, absorbable, claimed, share=True), key=topo_index.get)
+        strict = _grow_around(node, absorbable, claimed, share=False)
+        if set(shared) != set(strict) and _first_failure(shared, specs) is None:
+            found.append(shared)
+            claimed.update(shared)
+        else:
+            consider(strict)
 
     # leftover pointwise ops fuse with whatever they touch
     leftover = {n for n in absorbable if _is_pointwise(n, absorbable) and n not in claimed}

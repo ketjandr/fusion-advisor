@@ -255,6 +255,31 @@ class RowStat(nn.Module):
         return h.sum(-1, keepdim=True) + h.mean(-1, keepdim=True)
 
 
+class EscapingBias(nn.Module):
+    """A [D] value needed outside a [B, D] kernel - every program would rewrite it."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.bias = nn.Parameter(torch.randn(d))
+
+    def forward(self, x):
+        b = self.bias * 2.0
+        return x + b, b
+
+
+class PreNormResidual(nn.Module):
+    """h feeds its norm and the next residual add - the transformer block shape."""
+
+    def __init__(self, d=64):
+        super().__init__()
+        self.norm = nn.LayerNorm(d)
+        self.proj = nn.Linear(d, d)
+
+    def forward(self, x, y):
+        h = x + y
+        return self.proj(self.norm(h)) + h
+
+
 class OpaqueBarrier(nn.Module):
     """matmul between two chains - must yield TWO clusters."""
 

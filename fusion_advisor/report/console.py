@@ -170,3 +170,12 @@ def render_unmapped(cluster, rng) -> None:
         else "line range holds code outside the cluster, or spans two functions"
     )
     console.print(f"\ncluster {cluster.index} ({_where(rng)}): no safe diff - {reason}", style="dim")
+
+
+def render_multi_output(cluster, rng) -> None:
+    """Multi-output clusters are measured but not rewritten yet."""
+    console.print(
+        f"\ncluster {cluster.index} ({_where(rng)}): no diff yet - "
+        f"it has {len(cluster.outputs)} outputs.",
+        style="dim",
+    )

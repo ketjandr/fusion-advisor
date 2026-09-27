@@ -235,6 +235,10 @@ def _model_inputs(gm, specs, device="cuda") -> list[torch.Tensor]:
     )
 
 
+def _as_tuple(x) -> tuple:
+    return tuple(x) if isinstance(x, (tuple, list)) else (x,)
+
+
 def validate(
     kernel, cluster, gm, specs, *, atol=1e-4, rtol=1e-4, vs_inductor=False,
     peak_gbps=None,
@@ -265,8 +269,11 @@ def validate(
                 None,
                 f"JIT compile or first launch failed: {type(e).__name__}: {e}",
             )
-    max_err = (got - want).abs().max().item()
-    numerics_ok = torch.allclose(got, want, atol=atol, rtol=rtol)
+    got, want = _as_tuple(got), _as_tuple(want)  # multi-output kernels return several
+    max_err = max((g - w).abs().max().item() for g, w in zip(got, want, strict=True))
+    numerics_ok = all(
+        torch.allclose(g, w, atol=atol, rtol=rtol) for g, w in zip(got, want, strict=True)
+    )
     if not numerics_ok:
         return ValidationResult(True, False, None, max_err, None, "cluster numerics mismatch")
 

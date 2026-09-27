@@ -255,3 +255,13 @@ def test_norm_variants_match_eager(make, tmp_path):
 def test_anchored_clusters_match_eager(make, shapes, tmp_path):
     fn, args, reference = build(make().cuda(), *shapes, tmp_path=tmp_path)
     torch.testing.assert_close(fn(*args), reference(*args), atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize(
+    ("make", "shapes"),
+    [(basic.PreNormResidual, [(8, 16, 64), (8, 16, 64)]), (basic.EscapingOutput, [(4, 100)])],
+    ids=["residual-norm", "returned-intermediate"],
+)
+def test_multi_output_kernel_matches_eager(make, shapes, tmp_path):
+    fn, args, reference = build(make().cuda(), *shapes, tmp_path=tmp_path)
+    torch.testing.assert_close(fn(*args), reference(*args), atol=1e-5, rtol=1e-5)

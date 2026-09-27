@@ -12,7 +12,7 @@ class ClusterCategory(Enum):
 class RejectionReason(Enum):
     """Surfaced by --explain-rejections."""
 
-    FAN_OUT = "consumer outside cluster: value must stay materialized"
+    UNSTORABLE_OUTPUT = "value needed outside the cluster has a shape this kernel cannot store"
     NON_CONVEX = "dependency path leaves the cluster and returns: unschedulable"
     SHAPE_MISMATCH = "shapes not provably compatible across cluster"
     ALIASING = "aliasing between cluster members"

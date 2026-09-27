@@ -341,3 +341,27 @@ def test_flushed_timing_never_beats_dram_peak():
     if peak is None:
         pytest.skip("driver does not report bandwidth")
     assert t.achieved_gbps <= 1.05 * peak
+
+
+# --- multi-output: the eager reference and the model rewrite ---
+
+
+def test_multi_output_subgraph_returns_every_output():
+    gm, clusters, _, inputs = pipeline(basic.PreNormResidual(), (4, 16, 64), (4, 16, 64))
+    sub = extract_subgraph(gm, clusters[0])
+    x, y = inputs
+    h, normed = sub(x, y, gm.norm.weight, gm.norm.bias)
+    torch.testing.assert_close(h, x + y)
+    torch.testing.assert_close(normed, torch.nn.functional.layer_norm(x + y, (64,), gm.norm.weight, gm.norm.bias))
+
+
+def test_multi_output_rewrite_matches_the_model():
+    """Each output must reach its own consumers; swapping them would still run."""
+    gm, clusters, _, inputs = pipeline(basic.PreNormResidual(), (4, 16, 64), (4, 16, 64))
+    sub = extract_subgraph(gm, clusters[0])
+
+    def kernel(*args):  # stands in for the generated wrapper on CPU
+        return sub(*args)
+
+    patched = rewrite_with_kernel(gm, clusters[0], kernel)
+    torch.testing.assert_close(patched(*inputs), gm(*inputs))

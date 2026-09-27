@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.fx as fx
 
@@ -41,12 +43,24 @@ def external_inputs(cluster_nodes) -> list:
     return out
 
 
-def check_fan_out(cluster_nodes) -> RejectionReason | None:
-    """Reject clusters needing more than one stored output.
-  
-    TODO: support valid multi-external consumers
-    """
-    return RejectionReason.FAN_OUT if len(escaping_nodes(cluster_nodes)) > 1 else None
+def block_dims(cluster_nodes, specs) -> tuple[int, ...]:
+    """Shape one kernel launch covers: the reduced operand, else the widest member."""
+    for n in cluster_nodes:
+        if classify(n) is OpCategory.REDUCTION:
+            return specs[n.args[0].name].dims
+    return max((specs[n.name].dims for n in cluster_nodes if n.name in specs), key=math.prod)
+
+
+def check_outputs(cluster_nodes, specs) -> RejectionReason | None:
+    """Every value needed outside must be storable: the full block, or one value per row."""
+    block = block_dims(cluster_nodes, specs)
+    reducing = any(classify(n) is OpCategory.REDUCTION for n in cluster_nodes)
+    per_row = {(*block[:-1], 1), block[:-1]} if reducing else set()
+    for n in escaping_nodes(cluster_nodes):
+        dims = specs[n.name].dims if n.name in specs else None
+        if dims != block and dims not in per_row:  # e.g. a [D] bias every program would rewrite
+            return RejectionReason.UNSTORABLE_OUTPUT
+    return None
 
 def check_convexity(cluster_nodes) -> RejectionReason | None:
     """Reject if a dependency path leaves the cluster and comes back."""

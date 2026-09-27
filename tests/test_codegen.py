@@ -394,6 +394,31 @@ def test_per_row_input_is_loaded_as_a_scalar():
     gm = trace(basic.RowStat())
     specs = propagate(gm, torch.randn(8, 16))
     clusters, _ = detect(gm, specs)
-    src = emit(clusters[0], specs).kernel_source
+    (c,) = [c for c in clusters if "add" in [n.name for n in c.nodes]]
+    src = emit(c, specs).kernel_source
     assert "tl.load(in_ptr1 + row)" in src
     assert "tl.store(out_ptr0 + row," in src
+
+
+# --- multi-output kernels ---
+
+
+def _pre_norm():
+    gm = trace(basic.PreNormResidual())
+    specs = propagate(gm, torch.randn(4, 16, 64), torch.randn(4, 16, 64))
+    clusters, _ = detect(gm, specs)
+    return clusters[0], emit(clusters[0], specs)
+
+
+def test_second_output_is_stored_and_returned():
+    cluster, kernel = _pre_norm()
+    assert [n.name for n in cluster.outputs] == ["add", "layer_norm"]
+    assert "tl.store(out_ptr0 + (base)" in kernel.kernel_source  # the residual h
+    assert "tl.store(out_ptr1 + (base)" in kernel.kernel_source  # the norm
+    assert "return out0, out1" in kernel.wrapper_source
+
+
+def test_each_output_gets_its_own_allocation():
+    _, kernel = _pre_norm()
+    assert "out0 = torch.empty((4, 16, 64), dtype=torch.float32" in kernel.wrapper_source
+    assert "out1 = torch.empty((4, 16, 64), dtype=torch.float32" in kernel.wrapper_source

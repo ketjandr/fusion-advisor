@@ -198,7 +198,9 @@ def main(
             if not apply_edits:
                 report.console.print(f"\nwrote [bold]{_write_kernel(out_path, kernels[i])}[/bold]")
             call = call_expression(kernels[i], c, var_names)
-            if rng.quality is MappingQuality.EXACT and call:
+            if len(c.outputs) > 1:  # the replacement would have to bind several variables
+                report.render_multi_output(c, rng)
+            elif rng.quality is MappingQuality.EXACT and call:
                 diffs[i] = build_diff(rng, kernels[i], loaded.source_text, call)
                 report.render_diff(diffs[i])
             elif rng.quality is MappingQuality.EXACT:

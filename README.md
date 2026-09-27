@@ -45,39 +45,64 @@ and records stack traces for the final source diff.
 
 ### Detection
 
-Each reduction anchors one candidate: it pulls in producers that only it consumes
-and consumers that only it feeds, so two reductions never compete for one kernel.
-Leftover pointwise ops form connected components, and a greedy pruning heuristic
-recovers legal fusable subDAGs from components that fail legality.
-
-Consider a transformer residual where `relu` feeds both `mul` and an external
-matmul:
+Each reduction anchors one candidate, pulling in the producers that feed it and
+consumers that only it feeds; leftover pointwise ops form connected components.
+Anchoring matters when one component holds two reductions:
 
 ```text
-         x
-         |
-       relu ─────────┐
-        |             |
-  [ mul, add ]      matmul     (opaque consumer)
+x -> mul -> layer_norm -> gelu -> layer_norm -> out
+     └────── cluster 0 ──────┘     (eager)
 ```
 
-The component `{relu, mul, add}` fails fan-out because `relu` escapes. Rather
-than reject everything, the pass drops `relu` and retries on `{mul, add}` -
-the fusable tail survives.
+As one candidate this has two reductions and is rejected whole. Anchored, the
+first norm claims `mul` and `gelu` (its only consumer), and the second norm is
+left with one real op, so it runs eagerly.
 
-Note that fan-out is **not** `len(node.users) > 1`, since a reconverging diamond like
-`x * 2.0 + x` has two users *inside* the group, so `x` stays in a register.
-The real predicate is whether any consumer lies outside.
+An *escape* is a cluster value with at least one consumer outside the cluster;
+each one is stored as a kernel output. Consumers inside the cluster do not
+count: in `x * 2.0 + x`, `x` is read twice but never leaves a register.
+
+**Escapes become extra outputs.** In a pre-norm transformer block, the residual
+add feeds both its norm and the next residual add:
+
+```text
+   attn_out    residual
+          \    /
+           add ─────────► next residual add   (outside: reads add's result)
+            |
+       layer_norm ──────► linear              (outside)
+```
+
+`{add, layer_norm}` becomes one kernel with two outputs, the new residual and
+the norm: one extra write, but `layer_norm` no longer re-reads the add's result.
+
+**Greedy pruning handles escapes that cannot be kept.** Here `relu` feeds a
+matmul whose result flows back into `add`:
+
+```text
+            x
+            |
+          relu ───► matmul
+            |          |
+           mul         |
+            |          |
+           add ◄───────┘
+```
+
+`{relu, mul, add}` is not convex: `relu -> matmul -> add` leaves the cluster and
+re-enters it, so one kernel would have to pause for the matmul. The heuristic
+keeps the last escaping value (`add`), drops the others (`relu`), and retries;
+`{mul, add}` survives.
 
 **Legality checks** (run in order, first failure wins):
 
 | Check | Rejects |
 | --- | --- |
-| **Fan-out** | value consumed outside the group (must be materialized) |
 | **Convexity** | dependency path leaves the subDAG and re-enters (unschedulable) |
 | **Shapes** | operands not broadcast-compatible (can't co-index) |
 | **Aliasing** | views or in-place mutation on cluster values (FX models dataflow, not mutation order) |
 | **Reduction** | multi-reduction or non-last-axis (one row-per-program kernel can't express it) |
+| **Outputs** | a value needed outside with a shape no single program owns, e.g. a broadcast `[D]` |
 | **Lowering** | node without a Triton lowering rule |
 
 ### Cost model

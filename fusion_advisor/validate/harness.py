@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import operator
 
 import torch
 import torch.fx as fx
@@ -23,7 +24,8 @@ def extract_subgraph(gm: fx.GraphModule, cluster) -> fx.GraphModule:
     for node in cluster.nodes:
         env[node] = graph.node_copy(node, lambda n: env[n])
 
-    graph.output(env[cluster.outputs[0]])
+    outs = [env[o] for o in cluster.outputs]
+    graph.output(outs[0] if len(outs) == 1 else tuple(outs))
     graph.lint()
     return fx.GraphModule(gm, graph)
 
@@ -34,15 +36,22 @@ def rewrite_with_kernel(gm: fx.GraphModule, cluster, wrapper) -> fx.GraphModule:
     # deepcopy gives new Node objects, so re-find them by name
     by_name = {n.name: n for n in patched.graph.nodes}
 
-    out = by_name[cluster.outputs[0].name]
+    members = [by_name[n.name] for n in cluster.nodes]
+    outs = [by_name[o.name] for o in cluster.outputs]
     args = tuple(by_name[n.name] for n in cluster.inputs)
 
-    with patched.graph.inserting_after(out):
+    with patched.graph.inserting_after(members[-1]):  # after every member, so inputs exist
         call = patched.graph.call_function(wrapper, args)
-    out.replace_all_uses_with(call)
+    if len(outs) == 1:
+        outs[0].replace_all_uses_with(call)
+    else:  # the kernel returns a tuple; each output feeds its own consumers
+        for i, out in reversed(list(enumerate(outs))):
+            with patched.graph.inserting_after(call):
+                item = patched.graph.call_function(operator.getitem, (call, i))
+            out.replace_all_uses_with(item)
 
     # reverse topological order, so no node is erased while still used
-    for node in reversed([by_name[n.name] for n in cluster.nodes]):
+    for node in reversed(members):
         patched.graph.erase_node(node)
 
     patched.graph.lint()

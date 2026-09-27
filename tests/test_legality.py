@@ -1,4 +1,4 @@
-"""Tests for analysis/legality.py - pure graph topology, no shapes needed."""
+"""Tests for analysis/legality.py - the checks a candidate must pass to become one kernel."""
 
 import torch
 
@@ -7,8 +7,8 @@ from fusion_advisor.analysis.detect_clusters import detect
 from fusion_advisor.analysis.legality import (
     MAX_REDUCTION_BLOCK,
     check_convexity,
-    check_fan_out,
     check_lowering,
+    check_outputs,
     check_reduction,
     escaping_nodes,
 )
@@ -45,26 +45,34 @@ def test_escaping_nodes_counts_opaque_consumers():
     assert "relu" in names(escaping_nodes(c))
 
 
-def test_reconverging_diamond_passes_fan_out():
+def with_specs(model, shape, *names):
+    gm = trace(model)
+    specs = propagate(gm, torch.randn(*shape))
+    return [n for n in gm.graph.nodes if n.name in names], specs
+
+
+def test_reconverging_diamond_is_one_output():
     """The check that `len(users) > 1` gets wrong - residuals look like this."""
-    c = cluster(basic.ReconvergingDiamond(), "relu", "mul", "add")
-    assert check_fan_out(c) is None
+    c, specs = with_specs(basic.ReconvergingDiamond(), (4, 64), "relu", "mul", "add")
+    assert check_outputs(c, specs) is None
 
 
-def test_repeated_operand_passes_fan_out():
+def test_repeated_operand_is_one_output():
     """`h + h` - one user, two arg positions."""
-    c = cluster(basic.RepeatedOperand(), "relu", "add")
-    assert check_fan_out(c) is None
+    c, specs = with_specs(basic.RepeatedOperand(), (4, 64), "relu", "add")
+    assert check_outputs(c, specs) is None
 
 
-def test_escaping_output_fails_fan_out():
-    c = cluster(basic.EscapingOutput(), "relu", "mul")
-    assert check_fan_out(c) is RejectionReason.FAN_OUT
+def test_second_full_size_output_is_storable():
+    """relu is returned too; storing it costs a write but saves the re-read."""
+    c, specs = with_specs(basic.EscapingOutput(), (4, 64), "relu", "mul")
+    assert check_outputs(c, specs) is None
 
 
-def test_true_fan_out_fails():
-    c = cluster(basic.TrueFanOut(), "relu", "mul", "add")
-    assert check_fan_out(c) is RejectionReason.FAN_OUT
+def test_broadcast_shaped_output_is_unstorable():
+    """A [D] value in a [B, D] kernel has no single program that owns it."""
+    c, specs = with_specs(basic.EscapingBias(), (4, 64), "mul", "add")
+    assert check_outputs(c, specs) is RejectionReason.UNSTORABLE_OUTPUT
 
 
 def test_diamond_is_convex():
@@ -146,7 +154,7 @@ def test_detection_splits_two_reductions_instead_of_rejecting():
     """Each reduction anchors its own group, so the pair never meets legality."""
     clusters, rej = reasons(TwoReductions(), (8, 16))
     assert RejectionReason.UNSUPPORTED_REDUCTION not in rej
-    assert [names(c.nodes) for c in clusters] == [["sum_1", "add"]]
+    assert [names(c.nodes) for c in clusters] == [["mul", "mean"], ["sum_1", "add"]]
 
 
 def test_unlowerable_op_is_rejected_not_crashed():
